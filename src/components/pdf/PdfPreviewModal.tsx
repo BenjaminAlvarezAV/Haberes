@@ -1,0 +1,67 @@
+import { useEffect, useMemo, useState } from 'react'
+import type { TDocumentDefinitions } from 'pdfmake/interfaces'
+import { Modal } from '../ui/Modal'
+import { Button } from '../ui/Button'
+import { createPdfBlobUrl, downloadPdf } from '../../pdf/render'
+
+export function PdfPreviewModal({
+  doc,
+  filename,
+  onClose,
+}: {
+  doc: TDocumentDefinitions
+  filename: string
+  onClose: () => void
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const stableDoc = useMemo(() => doc, [doc])
+
+  useEffect(() => {
+    let active = true
+    let createdUrl: string | null = null
+    void (async () => {
+      try {
+        const nextUrl = await createPdfBlobUrl(stableDoc)
+        if (!active) return
+        createdUrl = nextUrl
+        setUrl(nextUrl)
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'No se pudo generar el PDF')
+      }
+    })()
+
+    return () => {
+      active = false
+      if (createdUrl) URL.revokeObjectURL(createdUrl)
+    }
+  }, [stableDoc])
+
+  return (
+    <Modal title="Vista previa del PDF" onClose={onClose}>
+      <div className="flex items-center justify-between gap-3 pb-3">
+        <p className="text-sm text-gray-700">
+          Podés revisar el PDF y luego descargarlo. Si el PDF está vacío, revisá filtros/períodos.
+        </p>
+        <Button type="button" onClick={() => downloadPdf(stableDoc, filename)}>
+          Descargar
+        </Button>
+      </div>
+
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+      {url ? (
+        <iframe
+          title="Preview PDF"
+          src={url}
+          className="h-[70vh] w-full rounded-md ring-1 ring-gray-200"
+        />
+      ) : (
+        <div className="flex h-[70vh] items-center justify-center rounded-md bg-gray-50 ring-1 ring-gray-200">
+          <p className="text-sm text-gray-600">Generando PDF…</p>
+        </div>
+      )}
+    </Modal>
+  )
+}

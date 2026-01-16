@@ -1,0 +1,33 @@
+﻿# dependencies
+node_modules
+
+# build
+dist
+dist-ssr
+
+# env
+.env
+.env.*
+*.local
+
+# logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# misc
+vite-dev.log
+vite-dev.err.log
+vite-*.log
+vite-*.err.log
