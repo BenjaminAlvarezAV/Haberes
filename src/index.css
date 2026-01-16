@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+/* App base styles (minimal, Tailwind-first) */
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    'Noto Sans',
+    'Liberation Sans',
+    sans-serif;
+  color: rgb(17 24 39);
+  background: rgb(243 244 246);
+}
+
+:focus-visible {
+  outline: 2px solid rgb(59 130 246);
+  outline-offset: 2px;
+}
