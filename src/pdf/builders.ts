@@ -1,4 +1,4 @@
-import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces'
+﻿import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces'
 import type { GroupMode, NormalizedPayroll, PayrollItem } from '../types/payroll'
 import { groupByAgent, groupByPeriod } from '../utils/grouping'
 
@@ -68,7 +68,7 @@ export function buildPdfByPeriod(
     const items = byPeriod[period]
     content.push({ text: `Período: ${period}`, style: 'h2', margin: [0, 10, 0, 6] })
     content.push(
-      buildItemsTable(items, ['CUIL', 'Concepto', 'Importe'], (it) => [
+      buildItemsTable(items, ['Documento', 'Concepto', 'Importe'], (it) => [
         it.cuil,
         it.concepto,
         { text: money(it.importe), alignment: 'right' },
@@ -82,6 +82,47 @@ export function buildPdfByPeriod(
   }
 
   return baseDoc(content)
+}
+
+export interface PeriodPdf {
+  periodo: string
+  doc: TDocumentDefinitions
+}
+
+// Nuevo requerimiento: generar 1 PDF por período (descarga múltiple)
+export function buildPeriodPdfs(
+  normalized: NormalizedPayroll,
+  selectedAgents?: string[],
+  selectedPeriods?: string[],
+): PeriodPdf[] {
+  const filtered: NormalizedPayroll = {
+    ...normalized,
+    items: normalized.items.filter(
+      (it) =>
+        (!selectedAgents || selectedAgents.includes(it.cuil)) &&
+        (!selectedPeriods || selectedPeriods.includes(it.periodo)),
+    ),
+  }
+
+  const { byPeriod, orderedPeriods } = groupByPeriod(filtered)
+  return orderedPeriods.map((periodo) => {
+    const items = byPeriod[periodo]
+    const content: Content[] = [{ text: `Haberes - Período ${periodo}`, style: 'h1' }]
+    content.push(
+      buildItemsTable(items, ['Documento', 'Concepto', 'Importe'], (it) => [
+        it.cuil,
+        it.concepto,
+        { text: money(it.importe), alignment: 'right' },
+      ]),
+    )
+    content.push({
+      text: `Total período: ${money(sectionTotal(items))}`,
+      style: 'total',
+      margin: [0, 6, 0, 0],
+    })
+
+    return { periodo, doc: baseDoc(content) }
+  })
 }
 
 export function buildPdf(

@@ -1,39 +1,69 @@
-import { useCallback, useRef, useState } from 'react'
-import { parseCuilTxtDetailed, type ParseCuilReport } from '../../utils/txtParser'
+﻿import { useCallback, useMemo, useRef, useState } from 'react'
+import {
+  parseSercopeCsvDetailed,
+  type ParseCuilReport,
+  type ParseSercopeRow,
+} from '../../utils/txtParser'
+import { expandYYYYMMRange } from '../../utils/period'
 
-export interface CuilUploaderProps {
-  onCuilsParsed: (cuils: string[], report: ParseCuilReport) => void
+export interface SercopeUploadPayload {
+  documentos: string[]
+  rows: ParseSercopeRow[]
+  periodos: string[]
+  report: ParseCuilReport
 }
 
-export function CuilUploader({ onCuilsParsed }: CuilUploaderProps) {
+export interface CuilUploaderProps {
+  onParsed: (payload: SercopeUploadPayload) => void
+}
+
+export function CuilUploader({ onParsed }: CuilUploaderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<ParseCuilReport | null>(null)
 
+  const [lastRows, setLastRows] = useState<ParseSercopeRow[] | null>(null)
+
+  const derivedPeriods = useMemo(() => {
+    if (!lastRows) return []
+    const set = new Set<string>()
+    for (const r of lastRows) {
+      for (const p of expandYYYYMMRange(r.periodoDesde, r.periodoHasta)) set.add(p)
+    }
+    return Array.from(set).sort()
+  }, [lastRows])
+
   const handleFile = useCallback(
     async (file: File) => {
-      if (!file.name.toLowerCase().endsWith('.txt')) {
-        setError('Solo se permiten archivos .txt')
+      if (!file.name.toLowerCase().endsWith('.csv')) {
+        setError('Solo se permiten archivos .csv')
         return
       }
 
       try {
-        const detailed = await parseCuilTxtDetailed(file)
+        const detailed = await parseSercopeCsvDetailed(file)
         setReport(detailed.report)
+        setLastRows(detailed.rows)
 
-        if (detailed.cuils.length === 0) {
-          setError('El archivo está vacío o no contiene CUILs válidos')
-          onCuilsParsed([], detailed.report)
+        if (detailed.rows.length === 0) {
+          setError('El archivo está vacío o no contiene filas válidas')
+          onParsed({ documentos: [], rows: [], periodos: [], report: detailed.report })
           return
         }
 
+        const set = new Set<string>()
+        for (const r of detailed.rows) {
+          for (const p of expandYYYYMMRange(r.periodoDesde, r.periodoHasta)) set.add(p)
+        }
+        const periodos = Array.from(set).sort()
+
         setError(null)
-        onCuilsParsed(detailed.cuils, detailed.report)
+        onParsed({ documentos: detailed.documentos, rows: detailed.rows, periodos, report: detailed.report })
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Error al leer el archivo')
       }
     },
-    [onCuilsParsed],
+    [onParsed],
   )
 
   const onDrop = useCallback(
@@ -60,9 +90,10 @@ export function CuilUploader({ onCuilsParsed }: CuilUploaderProps) {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <label className="block text-sm font-medium text-gray-900">Nómina (TXT)</label>
+          <label className="block text-sm font-medium text-gray-900">Archivo Sercope (CSV)</label>
           <p className="text-xs text-gray-600">
-            Un CUIL por línea. Se toleran espacios/guiones. Se deduplican.
+            Columnas: Documento (8), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM), Secuencia (000). No
+            se permiten períodos futuros.
           </p>
         </div>
         <button
@@ -84,10 +115,16 @@ export function CuilUploader({ onCuilsParsed }: CuilUploaderProps) {
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') onPick()
         }}
-        aria-label="Zona de carga de TXT"
+        aria-label="Zona de carga de CSV"
       >
-        <input ref={inputRef} type="file" accept=".txt" className="hidden" onChange={onChange} />
-        <p className="text-sm font-medium text-gray-900">Arrastrá y soltá el TXT acá</p>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".csv"
+          className="hidden"
+          onChange={onChange}
+        />
+        <p className="text-sm font-medium text-gray-900">Arrastrá y soltá el CSV acá</p>
         <p className="mt-1 text-xs text-gray-600">o hacé click para seleccionar</p>
       </div>
 
@@ -110,6 +147,12 @@ export function CuilUploader({ onCuilsParsed }: CuilUploaderProps) {
             <div className="font-semibold text-gray-900">{report.duplicates}</div>
           </div>
         </div>
+      ) : null}
+
+      {derivedPeriods.length > 0 ? (
+        <p className="text-xs text-gray-600">
+          Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
+        </p>
       ) : null}
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}

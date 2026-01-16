@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { isValidPeriod } from '../../utils/period'
+import { currentPeriod, isFuturePeriod, isValidPeriod } from '../../utils/period'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
 
@@ -11,12 +11,19 @@ export function PeriodSelector({
   onChange: (periodos: string[]) => void
 }) {
   const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
   const sorted = useMemo(() => [...value].sort(), [value])
+  const max = useMemo(() => currentPeriod(), [])
 
   const add = (p: string) => {
     if (!isValidPeriod(p)) return
+    if (isFuturePeriod(p, max)) {
+      setError('No se permiten períodos futuros')
+      return
+    }
     if (value.includes(p)) return
+    setError(null)
     onChange([...value, p])
   }
 
@@ -32,10 +39,13 @@ export function PeriodSelector({
               type="month"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              max={max}
               aria-label="Seleccionar período"
             />
           </div>
-          <p className="mt-1 text-xs text-gray-600">Podés agregar uno o más períodos.</p>
+          <p className="mt-1 text-xs text-gray-600">
+            Podés agregar uno o más períodos (hasta {max}).
+          </p>
         </div>
         <Button
           type="button"
@@ -49,6 +59,8 @@ export function PeriodSelector({
           Agregar
         </Button>
       </div>
+
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
       {sorted.length > 0 ? (
         <div className="flex flex-wrap gap-2">

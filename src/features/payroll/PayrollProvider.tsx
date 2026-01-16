@@ -1,9 +1,10 @@
-import { useCallback, useMemo, useReducer } from 'react'
+﻿import { useCallback, useMemo, useReducer } from 'react'
 import type { ReactNode } from 'react'
 import { fetchPayroll } from '../../services/payrollService'
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
+import { currentPeriod, isFuturePeriod } from '../../utils/period'
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
@@ -12,7 +13,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
     if (state.cuils.length === 0) {
       dispatch({
         type: 'FETCH_ERROR',
-        payload: validationError('Cargá un TXT con al menos un CUIL válido'),
+        payload: validationError('Cargá un CSV con al menos una fila válida'),
       })
       return
     }
@@ -20,6 +21,16 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       dispatch({
         type: 'FETCH_ERROR',
         payload: validationError('Seleccioná al menos un período (YYYY-MM)'),
+      })
+      return
+    }
+
+    const max = currentPeriod()
+    const hasFuture = state.periodos.some((p) => isFuturePeriod(p, max))
+    if (hasFuture) {
+      dispatch({
+        type: 'FETCH_ERROR',
+        payload: validationError(`No se permiten períodos futuros (máximo ${max})`),
       })
       return
     }
@@ -40,3 +51,4 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
   return <PayrollContext.Provider value={value}>{children}</PayrollContext.Provider>
 }
+
