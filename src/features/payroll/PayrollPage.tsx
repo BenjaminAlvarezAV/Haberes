@@ -2,6 +2,7 @@
 import JSZip from 'jszip'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
+import { Input } from '../../components/ui/Input'
 import { CuilUploader, type SercopeUploadPayload } from '../../components/upload/CuilUploader'
 import { PeriodSelector } from '../../components/filters/PeriodSelector'
 import { GroupToggle } from '../../components/results/GroupToggle'
@@ -30,6 +31,11 @@ function isGroupedByPeriod(grouped: GroupedByAgent | GroupedByPeriod | null): gr
 
 function pdfFilename(pdf: PdfEntry): string {
   return 'cuil' in pdf ? `haberes-${pdf.cuil}.pdf` : `haberes-${pdf.periodo}.pdf`
+}
+
+function matchesSearch(value: string, term: string): boolean {
+  if (!term) return true
+  return value.toLowerCase().includes(term)
 }
 
 const PDF_TIMEOUT_MS = 60000
@@ -64,6 +70,8 @@ export function PayrollPage() {
 
   const [pdfOpen, setPdfOpen] = useState(false)
   const [previewIndex, setPreviewIndex] = useState(0)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [pageIndex, setPageIndex] = useState(0)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadingZip, setDownloadingZip] = useState(false)
   const [zipBlob, setZipBlob] = useState<Blob | null>(null)
@@ -78,10 +86,33 @@ export function PayrollPage() {
     return groupMode === 'agent' ? groupByAgent(data) : groupByPeriod(data)
   }, [data, groupMode])
 
+  const normalizedSearch = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm])
   const agentPdfs = useMemo(() => (data ? buildAgentPdfs(data) : []), [data])
   const periodPdfs = useMemo(() => (data ? buildPeriodPdfs(data) : []), [data])
-  const pdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
+  const allPdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
+  const pdfs = useMemo(() => {
+    if (!normalizedSearch) return allPdfs
+    return allPdfs.filter((pdf) =>
+      matchesSearch('cuil' in pdf ? pdf.cuil : pdf.periodo, normalizedSearch),
+    )
+  }, [allPdfs, normalizedSearch])
   const preview = pdfs[previewIndex] ?? null
+
+  const filteredAgentKeys = useMemo(() => {
+    if (!isGroupedByAgent(grouped)) return []
+    if (!normalizedSearch) return grouped.orderedCuils
+    return grouped.orderedCuils.filter((cuil) => matchesSearch(cuil, normalizedSearch))
+  }, [grouped, normalizedSearch])
+
+  const filteredPeriodKeys = useMemo(() => {
+    if (!isGroupedByPeriod(grouped)) return []
+    if (!normalizedSearch) return grouped.orderedPeriods
+    return grouped.orderedPeriods.filter((period) => matchesSearch(period, normalizedSearch))
+  }, [grouped, normalizedSearch])
+
+  const totalPages = groupMode === 'agent' ? filteredAgentKeys.length : filteredPeriodKeys.length
+  const currentKey =
+    groupMode === 'agent' ? filteredAgentKeys[pageIndex] : filteredPeriodKeys[pageIndex]
 
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
@@ -100,6 +131,12 @@ export function PayrollPage() {
   }, [pdfs.length, previewIndex])
 
   useEffect(() => {
+    if (pageIndex >= totalPages && totalPages > 0) {
+      setPageIndex(0)
+    }
+  }, [pageIndex, totalPages])
+
+  useEffect(() => {
     if (!zipBlob || !zipName) return
     downloadBlob(zipBlob, zipName)
     setZipBlob(null)
@@ -116,7 +153,12 @@ export function PayrollPage() {
       setZipName(null)
       setZipProgress(null)
       setZipSkipped([])
-      const docs = groupMode === 'agent' ? buildAgentPdfs(data) : buildPeriodPdfs(data)
+      let docs: PdfEntry[] = groupMode === 'agent' ? buildAgentPdfs(data) : buildPeriodPdfs(data)
+      if (normalizedSearch) {
+        docs = docs.filter((pdf) =>
+          matchesSearch('cuil' in pdf ? pdf.cuil : pdf.periodo, normalizedSearch),
+        )
+      }
       if (docs.length === 0) return
 
       const zip = new JSZip()
@@ -166,7 +208,7 @@ export function PayrollPage() {
       setDownloadingZip(false)
       setZipProgress(null)
     }
-  }, [data, groupMode])
+  }, [data, groupMode, normalizedSearch])
 
   return (
     <div className="min-h-screen bg-gray-100 px-4 py-8">
@@ -222,6 +264,41 @@ export function PayrollPage() {
                 onChange={(mode) => dispatch({ type: 'SET_GROUP_MODE', payload: mode })}
               />
 
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  value={searchTerm}
+                  onChange={(event) => {
+                    setSearchTerm(event.target.value)
+                    setPageIndex(0)
+                    setPreviewIndex(0)
+                  }}
+                  placeholder={groupMode === 'agent' ? 'Buscar por CUIL…' : 'Buscar por período (YYYY-MM)…'}
+                />
+                <div className="flex items-center gap-2 text-xs text-gray-600">
+                  <span>
+                    {totalPages === 0
+                      ? 'Sin resultados'
+                      : `Página ${pageIndex + 1} de ${totalPages}`}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setPageIndex((idx) => Math.max(0, idx - 1))}
+                    disabled={totalPages === 0 || pageIndex === 0}
+                  >
+                    Anterior
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setPageIndex((idx) => Math.min(totalPages - 1, idx + 1))}
+                    disabled={totalPages === 0 || pageIndex >= totalPages - 1}
+                  >
+                    Siguiente
+                  </Button>
+                </div>
+              </div>
+
               {data.errors && data.errors.length > 0 ? (
                 <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
                   Se detectaron {data.errors.length} observaciones al normalizar la respuesta.
@@ -266,31 +343,27 @@ export function PayrollPage() {
                 </p>
               ) : null}
 
-              {groupMode === 'agent' && isGroupedByAgent(grouped) ? (
+              {groupMode === 'agent' && isGroupedByAgent(grouped) && currentKey ? (
                 <div className="space-y-6">
-                  {grouped.orderedCuils.map((cuil) => (
-                    <div key={cuil} className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-gray-900">Agente {cuil}</h4>
-                        <span className="text-xs text-gray-600">{grouped.byCuil[cuil].length} ítems</span>
-                      </div>
-                      <ResultsTable items={grouped.byCuil[cuil]} />
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-gray-900">Agente {currentKey}</h4>
+                      <span className="text-xs text-gray-600">{grouped.byCuil[currentKey].length} ítems</span>
                     </div>
-                  ))}
+                    <ResultsTable items={grouped.byCuil[currentKey]} />
+                  </div>
                 </div>
               ) : null}
 
-              {groupMode === 'period' && isGroupedByPeriod(grouped) ? (
+              {groupMode === 'period' && isGroupedByPeriod(grouped) && currentKey ? (
                 <div className="space-y-6">
-                  {grouped.orderedPeriods.map((period) => (
-                    <div key={period} className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-gray-900">Período {period}</h4>
-                        <span className="text-xs text-gray-600">{grouped.byPeriod[period].length} ítems</span>
-                      </div>
-                      <ResultsTable items={grouped.byPeriod[period]} />
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-gray-900">Período {currentKey}</h4>
+                      <span className="text-xs text-gray-600">{grouped.byPeriod[currentKey].length} ítems</span>
                     </div>
-                  ))}
+                    <ResultsTable items={grouped.byPeriod[currentKey]} />
+                  </div>
                 </div>
               ) : null}
             </div>
