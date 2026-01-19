@@ -89,6 +89,47 @@ export interface PeriodPdf {
   doc: TDocumentDefinitions
 }
 
+export interface AgentPdf {
+  cuil: string
+  doc: TDocumentDefinitions
+}
+
+// Nuevo requerimiento: generar 1 PDF por agente (descarga múltiple)
+export function buildAgentPdfs(
+  normalized: NormalizedPayroll,
+  selectedAgents?: string[],
+  selectedPeriods?: string[],
+): AgentPdf[] {
+  const filtered: NormalizedPayroll = {
+    ...normalized,
+    items: normalized.items.filter(
+      (it) =>
+        (!selectedAgents || selectedAgents.includes(it.cuil)) &&
+        (!selectedPeriods || selectedPeriods.includes(it.periodo)),
+    ),
+  }
+
+  const { byCuil, orderedCuils } = groupByAgent(filtered)
+  return orderedCuils.map((cuil) => {
+    const items = byCuil[cuil]
+    const content: Content[] = [{ text: `Haberes - Agente ${cuil}`, style: 'h1' }]
+    content.push(
+      buildItemsTable(items, ['Período', 'Concepto', 'Importe'], (it) => [
+        it.periodo,
+        it.concepto,
+        { text: money(it.importe), alignment: 'right' },
+      ]),
+    )
+    content.push({
+      text: `Total agente: ${money(sectionTotal(items))}`,
+      style: 'total',
+      margin: [0, 6, 0, 0],
+    })
+
+    return { cuil, doc: baseDoc(content) }
+  })
+}
+
 // Nuevo requerimiento: generar 1 PDF por período (descarga múltiple)
 export function buildPeriodPdfs(
   normalized: NormalizedPayroll,

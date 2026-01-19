@@ -1,4 +1,5 @@
-﻿import { useCallback, useMemo, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import JSZip from 'jszip'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { CuilUploader, type SercopeUploadPayload } from '../../components/upload/CuilUploader'
@@ -7,12 +8,45 @@ import { GroupToggle } from '../../components/results/GroupToggle'
 import { ResultsTable } from '../../components/results/ResultsTable'
 import { PdfPreviewModal } from '../../components/pdf/PdfPreviewModal'
 import { usePayroll } from '../../hooks/usePayroll'
-import { buildPeriodPdfs } from '../../pdf/builders'
-import { downloadPdf } from '../../pdf/render'
+import { buildAgentPdfs, buildPeriodPdfs } from '../../pdf/builders'
+import type { AgentPdf, PeriodPdf } from '../../pdf/builders'
+import { createPdfBase64, downloadBlob } from '../../pdf/render'
 import { groupByAgent, groupByPeriod } from '../../utils/grouping'
+import type { GroupedByAgent, GroupedByPeriod } from '../../utils/grouping'
+
+type PdfEntry = AgentPdf | PeriodPdf
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isGroupedByAgent(grouped: GroupedByAgent | GroupedByPeriod | null): grouped is GroupedByAgent {
+  return Boolean(grouped && 'orderedCuils' in grouped)
+}
+
+function isGroupedByPeriod(grouped: GroupedByAgent | GroupedByPeriod | null): grouped is GroupedByPeriod {
+  return Boolean(grouped && 'orderedPeriods' in grouped)
+}
+
+function pdfFilename(pdf: PdfEntry): string {
+  return 'cuil' in pdf ? `haberes-${pdf.cuil}.pdf` : `haberes-${pdf.periodo}.pdf`
+}
+
+const PDF_TIMEOUT_MS = 60000
+
+async function createPdfBase64WithTimeout(doc: PdfEntry['doc'], ms: number): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms)
+    createPdfBase64(doc)
+      .then((data) => {
+        clearTimeout(timer)
+        resolve(data)
+      })
+      .catch((err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+  })
 }
 
 export function PayrollPage() {
@@ -29,14 +63,25 @@ export function PayrollPage() {
   } = usePayroll()
 
   const [pdfOpen, setPdfOpen] = useState(false)
+  const [previewIndex, setPreviewIndex] = useState(0)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [downloadingZip, setDownloadingZip] = useState(false)
+  const [zipBlob, setZipBlob] = useState<Blob | null>(null)
+  const [zipName, setZipName] = useState<string | null>(null)
+  const [zipProgress, setZipProgress] = useState<{ current: number; total: number; label: string } | null>(
+    null,
+  )
+  const [zipSkipped, setZipSkipped] = useState<string[]>([])
 
   const grouped = useMemo(() => {
     if (!data) return null
     return groupMode === 'agent' ? groupByAgent(data) : groupByPeriod(data)
   }, [data, groupMode])
 
+  const agentPdfs = useMemo(() => (data ? buildAgentPdfs(data) : []), [data])
   const periodPdfs = useMemo(() => (data ? buildPeriodPdfs(data) : []), [data])
-  const preview = periodPdfs[0] ?? null
+  const pdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
+  const preview = pdfs[previewIndex] ?? null
 
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
@@ -48,19 +93,80 @@ export function PayrollPage() {
     [dispatch],
   )
 
+  useEffect(() => {
+    if (previewIndex >= pdfs.length && pdfs.length > 0) {
+      setPreviewIndex(0)
+    }
+  }, [pdfs.length, previewIndex])
+
+  useEffect(() => {
+    if (!zipBlob || !zipName) return
+    downloadBlob(zipBlob, zipName)
+    setZipBlob(null)
+    setZipName(null)
+  }, [zipBlob, zipName])
+
   const downloadAllPdfs = useCallback(async () => {
     if (!data) return
 
-    const docs = buildPeriodPdfs(data)
-    if (docs.length === 0) return
+    try {
+      setDownloadError(null)
+      setDownloadingZip(true)
+      setZipBlob(null)
+      setZipName(null)
+      setZipProgress(null)
+      setZipSkipped([])
+      const docs = groupMode === 'agent' ? buildAgentPdfs(data) : buildPeriodPdfs(data)
+      if (docs.length === 0) return
 
-    // Disparar múltiples descargas desde un solo click puede ser bloqueado por algunos browsers.
-    // Lo hacemos secuencial con una pausa mínima.
-    for (const d of docs) {
-      downloadPdf(d.doc, `haberes-${d.periodo}.pdf`)
-      await sleep(150)
+      const zip = new JSZip()
+      let added = 0
+      const skipped: string[] = []
+      for (let i = 0; i < docs.length; i += 1) {
+        const d = docs[i]
+        const filename = pdfFilename(d)
+        setZipProgress({ current: i + 1, total: docs.length, label: filename })
+        try {
+          const base64 = await createPdfBase64WithTimeout(d.doc, PDF_TIMEOUT_MS)
+          zip.file(filename, base64, { base64: true })
+          added += 1
+          await sleep(50)
+        } catch (err) {
+          console.error('Error al generar PDF para ZIP', filename, err)
+          const reason =
+            err instanceof Error
+              ? err.message === 'timeout'
+                ? 'timeout'
+                : err.message
+              : 'error'
+          skipped.push(`${filename} (${reason})`)
+        }
+      }
+
+      setZipSkipped(skipped)
+      if (added === 0) {
+        setDownloadError('No se pudo generar ningún PDF para el ZIP.')
+        return
+      }
+
+      const nextZipName = groupMode === 'agent' ? 'haberes-por-agente.zip' : 'haberes-por-periodo.zip'
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      setZipBlob(zipBlob)
+      setZipName(nextZipName)
+    } catch (e) {
+      console.error('Error al generar ZIP de PDFs', e)
+      const message =
+        e instanceof Error && e.message === 'timeout'
+          ? 'Tiempo de espera agotado para algún PDF.'
+          : null
+      setDownloadError(
+        `No se pudo generar el ZIP.${message ? ` ${message}` : ''} Revisá el filtro y volvé a intentar.`,
+      )
+    } finally {
+      setDownloadingZip(false)
+      setZipProgress(null)
     }
-  }, [data])
+  }, [data, groupMode])
 
   return (
     <div className="min-h-screen bg-gray-100 px-4 py-8">
@@ -122,7 +228,45 @@ export function PayrollPage() {
                 </div>
               ) : null}
 
-              {groupMode === 'agent' && grouped ? (
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    setPreviewIndex(0)
+                    setPdfOpen(true)
+                  }}
+                  disabled={!preview || (data.items?.length ?? 0) === 0}
+                >
+                  Vista previa PDF (primer grupo)
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void downloadAllPdfs()}
+                  disabled={pdfs.length === 0 || downloadingZip}
+                >
+                  {downloadingZip ? 'Generando ZIP…' : 'Descargar PDFs (ZIP)'}
+                </Button>
+                <span className="text-xs text-gray-600 self-center">
+                  {pdfs.length} PDF(s)
+                </span>
+              </div>
+              {zipProgress ? (
+                <p className="text-xs text-gray-600">
+                  Generando ZIP: {zipProgress.current}/{zipProgress.total} — {zipProgress.label}
+                </p>
+              ) : null}
+              {downloadError ? (
+                <p className="text-xs text-red-600">{downloadError}</p>
+              ) : null}
+              {zipSkipped.length > 0 ? (
+                <p className="text-xs text-amber-700">
+                  Se omitieron {zipSkipped.length} PDF(s): {zipSkipped.slice(0, 5).join(', ')}
+                  {zipSkipped.length > 5 ? '…' : ''}
+                </p>
+              ) : null}
+
+              {groupMode === 'agent' && isGroupedByAgent(grouped) ? (
                 <div className="space-y-6">
                   {grouped.orderedCuils.map((cuil) => (
                     <div key={cuil} className="space-y-3">
@@ -136,7 +280,7 @@ export function PayrollPage() {
                 </div>
               ) : null}
 
-              {groupMode === 'period' && grouped ? (
+              {groupMode === 'period' && isGroupedByPeriod(grouped) ? (
                 <div className="space-y-6">
                   {grouped.orderedPeriods.map((period) => (
                     <div key={period} className="space-y-3">
@@ -149,27 +293,6 @@ export function PayrollPage() {
                   ))}
                 </div>
               ) : null}
-
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  type="button"
-                  onClick={() => setPdfOpen(true)}
-                  disabled={!preview || (data.items?.length ?? 0) === 0}
-                >
-                  Vista previa PDF (primer período)
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => void downloadAllPdfs()}
-                  disabled={periodPdfs.length === 0}
-                >
-                  Descargar PDFs (1 por período)
-                </Button>
-                <span className="text-xs text-gray-600 self-center">
-                  {periodPdfs.length} PDF(s)
-                </span>
-              </div>
             </div>
           </Card>
         ) : null}
@@ -177,8 +300,12 @@ export function PayrollPage() {
         {pdfOpen && preview ? (
           <PdfPreviewModal
             doc={preview.doc}
-            filename={`haberes-${preview.periodo}.pdf`}
+            filename={pdfFilename(preview)}
             onClose={() => setPdfOpen(false)}
+            onPrev={() => setPreviewIndex((idx) => Math.max(0, idx - 1))}
+            onNext={() => setPreviewIndex((idx) => Math.min(pdfs.length - 1, idx + 1))}
+            hasPrev={previewIndex > 0}
+            hasNext={previewIndex < pdfs.length - 1}
           />
         ) : null}
       </div>
