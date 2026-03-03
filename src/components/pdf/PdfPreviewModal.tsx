@@ -8,10 +8,18 @@ export function PdfPreviewModal({
   doc,
   filename,
   onClose,
+  onPrev,
+  onNext,
+  hasPrev = false,
+  hasNext = false,
 }: {
   doc: TDocumentDefinitions
   filename: string
   onClose: () => void
+  onPrev?: () => void
+  onNext?: () => void
+  hasPrev?: boolean
+  hasNext?: boolean
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -44,9 +52,17 @@ export function PdfPreviewModal({
         <p className="text-sm text-gray-700">
           Podés revisar el PDF y luego descargarlo. Si el PDF está vacío, revisá filtros/períodos.
         </p>
-        <Button type="button" onClick={() => downloadPdf(stableDoc, filename)}>
-          Descargar
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="secondary" onClick={onPrev} disabled={!hasPrev}>
+            Anterior
+          </Button>
+          <Button type="button" variant="secondary" onClick={onNext} disabled={!hasNext}>
+            Siguiente
+          </Button>
+          <Button type="button" onClick={() => downloadPdf(stableDoc, filename)}>
+            Descargar archivo unico
+          </Button>
+        </div>
       </div>
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
