@@ -74,8 +74,6 @@ export function PayrollPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadingZip, setDownloadingZip] = useState(false)
-  const [zipBlob, setZipBlob] = useState<Blob | null>(null)
-  const [zipName, setZipName] = useState<string | null>(null)
   const [zipProgress, setZipProgress] = useState<{ current: number; total: number; label: string } | null>(
     null,
   )
@@ -136,21 +134,12 @@ export function PayrollPage() {
     }
   }, [pageIndex, totalPages])
 
-  useEffect(() => {
-    if (!zipBlob || !zipName) return
-    downloadBlob(zipBlob, zipName)
-    setZipBlob(null)
-    setZipName(null)
-  }, [zipBlob, zipName])
-
   const downloadAllPdfs = useCallback(async () => {
     if (!data) return
 
     try {
       setDownloadError(null)
       setDownloadingZip(true)
-      setZipBlob(null)
-      setZipName(null)
       setZipProgress(null)
       setZipSkipped([])
       let docs: PdfEntry[] = groupMode === 'agent' ? buildAgentPdfs(data) : buildPeriodPdfs(data)
@@ -192,9 +181,11 @@ export function PayrollPage() {
       }
 
       const nextZipName = groupMode === 'agent' ? 'haberes-por-agente.zip' : 'haberes-por-periodo.zip'
-      const zipBlob = await zip.generateAsync({ type: 'blob' })
-      setZipBlob(zipBlob)
-      setZipName(nextZipName)
+      const rawZipBlob = await zip.generateAsync({ type: 'blob' })
+      // Asegurar MIME para mejorar compatibilidad (algunos browsers descargan mejor con type explícito).
+      const zipBlob = new Blob([rawZipBlob], { type: 'application/zip' })
+      // Disparar descarga dentro del handler (mejor compatibilidad que hacerlo en useEffect).
+      downloadBlob(zipBlob, nextZipName)
     } catch (e) {
       console.error('Error al generar ZIP de PDFs', e)
       const message =
@@ -343,29 +334,32 @@ export function PayrollPage() {
                 </p>
               ) : null}
 
-              {groupMode === 'agent' && isGroupedByAgent(grouped) && currentKey ? (
-                <div className="space-y-6">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold text-gray-900">Agente {currentKey}</h4>
-                      <span className="text-xs text-gray-600">{grouped.byCuil[currentKey].length} ítems</span>
+              {/* Contenedor scrolleable para evitar que la página crezca demasiado con resultados */}
+              <div className="max-h-[60vh] overflow-y-auto pr-1">
+                {groupMode === 'agent' && isGroupedByAgent(grouped) && currentKey ? (
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-semibold text-gray-900">Agente {currentKey}</h4>
+                        <span className="text-xs text-gray-600">{grouped.byCuil[currentKey].length} ítems</span>
+                      </div>
+                      <ResultsTable items={grouped.byCuil[currentKey]} />
                     </div>
-                    <ResultsTable items={grouped.byCuil[currentKey]} />
                   </div>
-                </div>
-              ) : null}
+                ) : null}
 
-              {groupMode === 'period' && isGroupedByPeriod(grouped) && currentKey ? (
-                <div className="space-y-6">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold text-gray-900">Período {currentKey}</h4>
-                      <span className="text-xs text-gray-600">{grouped.byPeriod[currentKey].length} ítems</span>
+                {groupMode === 'period' && isGroupedByPeriod(grouped) && currentKey ? (
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-semibold text-gray-900">Período {currentKey}</h4>
+                        <span className="text-xs text-gray-600">{grouped.byPeriod[currentKey].length} ítems</span>
+                      </div>
+                      <ResultsTable items={grouped.byPeriod[currentKey]} />
                     </div>
-                    <ResultsTable items={grouped.byPeriod[currentKey]} />
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
             </div>
           </Card>
         ) : null}

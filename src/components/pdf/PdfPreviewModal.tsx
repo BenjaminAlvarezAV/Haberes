@@ -60,7 +60,7 @@ export function PdfPreviewModal({
             Siguiente
           </Button>
           <Button type="button" onClick={() => downloadPdf(stableDoc, filename)}>
-            Descargar
+            Descargar archivo unico
           </Button>
         </div>
       </div>
