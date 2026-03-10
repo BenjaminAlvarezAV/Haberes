@@ -18,21 +18,24 @@ export function GroupToggle({
         <h3 className="text-sm font-semibold text-gray-900">Resultados</h3>
         <p className="text-xs text-gray-600">Elegí cómo agrupar la visualización y el PDF.</p>
       </div>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          className={`${base} ${value === 'agent' ? on : off}`}
-          onClick={() => onChange('agent')}
-        >
-          Por Agente
-        </button>
-        <button
-          type="button"
-          className={`${base} ${value === 'period' ? on : off}`}
-          onClick={() => onChange('period')}
-        >
-          Por Período
-        </button>
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-medium text-gray-600">Grupo de resultados:</span>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className={`${base} ${value === 'agent' ? on : off}`}
+            onClick={() => onChange('agent')}
+          >
+            Por Agente
+          </button>
+          <button
+            type="button"
+            className={`${base} ${value === 'period' ? on : off}`}
+            onClick={() => onChange('period')}
+          >
+            Por Período
+          </button>
+        </div>
       </div>
     </div>
   )

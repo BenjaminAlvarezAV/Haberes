@@ -1,4 +1,4 @@
-﻿export function isValidPeriod(period: string): boolean {
+export function isValidPeriod(period: string): boolean {
   if (!/^\d{4}-\d{2}$/.test(period)) return false
   const month = Number(period.slice(5, 7))
   return month >= 1 && month <= 12
@@ -13,6 +13,11 @@ export function currentPeriod(): string {
 
 export function currentYYYYMM(): string {
   return currentPeriod().replace('-', '')
+}
+
+export function periodToYYYYMM(period: string): string {
+  // YYYY-MM -> YYYYMM
+  return period.replace('-', '')
 }
 
 export function isFuturePeriod(period: string, nowPeriod: string = currentPeriod()): boolean {
@@ -55,4 +60,10 @@ export function expandYYYYMMRange(fromYYYYMM: string, toYYYYMM: string): string[
   }
 
   return periods
+}
+
+export function expandPeriodRange(fromPeriod: string, toPeriod: string): string[] {
+  if (!isValidPeriod(fromPeriod) || !isValidPeriod(toPeriod)) return []
+  if (fromPeriod > toPeriod) return []
+  return expandYYYYMMRange(periodToYYYYMM(fromPeriod), periodToYYYYMM(toPeriod))
 }

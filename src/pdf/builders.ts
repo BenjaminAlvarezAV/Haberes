@@ -1,5 +1,6 @@
 import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interfaces'
 import type { GroupMode, NormalizedPayroll, PayrollItem } from '../types/payroll'
+import type { ChequesBundle, LiquidPorEstablecimientoItem, LiquidacionPorSecuenciaItem } from '../types/cheques'
 import { groupByAgent, groupByPeriod } from '../utils/grouping'
 import { RECEIPT_FOOTER_TEXT, RECEIPT_HEADER_LINES } from './receiptConstants'
 
@@ -20,11 +21,128 @@ function mesPago(period: string): string {
   return `${m} / ${y}`
 }
 
+function yyyymmToPeriod(yyyymmValue: string | null | undefined): string | null {
+  const s = String(yyyymmValue ?? '')
+    .replace(/\D/g, '')
+    .trim()
+  if (s.length !== 6) return null
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}`
+}
+
 function formatDateDDMMYYYY(d: Date): string {
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const yyyy = d.getFullYear()
   return `${dd}/${mm}/${yyyy}`
+}
+
+function formatEstablecimientoRow(it: LiquidPorEstablecimientoItem): string {
+  const d = it.distrito == null ? '---' : String(it.distrito).padStart(3, '0')
+  const org = (it.tipoOrg ?? '--').toString().padStart(2, '0').replace(/^0/, '').trim() || (it.tipoOrg ?? '--')
+  const num = it.numero == null ? '----' : String(it.numero).padStart(4, '0')
+  return `${d} ${org} ${num}`.trim()
+}
+
+function sumLiquid(rows: LiquidPorEstablecimientoItem[]): number {
+  return rows.reduce((acc, r) => acc + (r.liquido ?? 0), 0)
+}
+
+function groupCodes(items: LiquidacionPorSecuenciaItem[]): Array<{ codigo: string; desc: string; amount: number }> {
+  const map = new Map<string, { codigo: string; desc: string; amount: number }>()
+  for (const it of items) {
+    const codigo = it.codigo ?? ''
+    const desc = it.descripcionCodigo ?? 'Sin descripción'
+    const amount = it.pesos ?? 0
+    const key = `${codigo}||${desc}`
+    const prev = map.get(key)
+    if (prev) prev.amount += amount
+    else map.set(key, { codigo, desc, amount })
+  }
+  return Array.from(map.values()).sort((a, b) => a.codigo.localeCompare(b.codigo))
+}
+
+function yesNoFromFlag(value: string | null): string {
+  if (!value) return '—'
+  const v = String(value).trim().toLowerCase()
+  if (v === 's' || v === 'si' || v === 'sí' || v === 'y' || v === 'yes' || v === 'true' || v === '1') return 'S'
+  if (v === 'n' || v === 'no' || v === 'false' || v === '0') return 'N'
+  return value
+}
+
+type SecuenciaGroup = {
+  key: string
+  meta: {
+    estabCode: string
+    nombreEstab: string
+    categoria: string
+    desfavor: string
+    secciones: string
+    esCarcel: string
+    dobleEscol: string
+    turnos: string
+    secuencia: string
+    revista: string
+    cargoReal: string
+    choraria: string
+    apoyoReal: string
+    cargoInt: string
+    apoyoInt: string
+    periodoLiq: string
+    ordenPago: string
+  }
+  items: LiquidacionPorSecuenciaItem[]
+}
+
+function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo: string): SecuenciaGroup[] {
+  const map = new Map<string, SecuenciaGroup>()
+
+  for (const it of items) {
+    const tipoOrg = (it.tipoOrg ?? '').trim()
+    const numero = (it.numero ?? '').trim()
+    const secu = (it.secu ?? '').trim()
+    const nombreEstab = (it.nombreEstab ?? '').trim()
+    const rev = (it.rev ?? '').trim()
+    const oPid = (it.oPid ?? '').trim()
+    const periodoLiq = yyyymmToPeriod(it.mesaPago)?.trim() || yyyymmToPeriod(it.fecAfec)?.trim() || fallbackPeriodo
+
+    const estabCode = tipoOrg && numero ? `${tipoOrg}-${numero}` : '—'
+    const key = [estabCode, secu, rev, oPid, periodoLiq, nombreEstab].join('|')
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        meta: {
+          estabCode,
+          nombreEstab: nombreEstab || '—',
+          categoria: it.cat ?? '—',
+          desfavor: yesNoFromFlag(it.rural),
+          secciones: it.secciones ?? '—',
+          esCarcel: yesNoFromFlag(null),
+          dobleEscol: yesNoFromFlag(it.dobEscolEstab),
+          turnos: it.turnos ?? '—',
+          secuencia: secu || '—',
+          revista: rev || '—',
+          cargoReal: '—',
+          choraria: '—',
+          apoyoReal: '—',
+          cargoInt: '—',
+          apoyoInt: '—',
+          periodoLiq: mesPago(periodoLiq),
+          ordenPago: oPid ? `ORDEN DE PAGO: ${oPid}` : '—',
+        },
+        items: [],
+      })
+    }
+
+    map.get(key)!.items.push(it)
+  }
+
+  // Orden estable: por estabCode, secuencia, revista
+  return Array.from(map.values()).sort((a, b) => {
+    const aKey = `${a.meta.estabCode}-${a.meta.secuencia}-${a.meta.revista}`
+    const bKey = `${b.meta.estabCode}-${b.meta.secuencia}-${b.meta.revista}`
+    return aKey.localeCompare(bKey)
+  })
 }
 
 function sectionTotal(items: PayrollItem[]): number {
@@ -77,6 +195,11 @@ function boxedBlock(inner: Content, marginBottom: number = 8, roomy: boolean = f
     layout: roomy ? boxedLayoutRoomy : boxedLayout,
     margin: [0, 0, 0, marginBottom],
   }
+}
+
+function linesOrDash(lines: string[] | null | undefined): string {
+  const filtered = (lines ?? []).map((s) => s.trim()).filter(Boolean)
+  return filtered.length ? filtered.join('\n') : '—'
 }
 
 export function buildPdfByAgent(
@@ -166,15 +289,24 @@ function buildReceiptPage({
   periodo,
   items,
   agentName,
+  cheques,
 }: {
   documento: string
   periodo: string
   items: PayrollItem[]
   agentName: string
+  cheques?: ChequesBundle
 }): Content[] {
   const now = new Date()
-  const total = sectionTotal(items)
+  const total = cheques?.liquidPorEstablecimiento?.length
+    ? sumLiquid(cheques.liquidPorEstablecimiento)
+    : sectionTotal(items)
   const { haberes, descuentos } = splitHaberes(items)
+
+  const head = cheques?.liquidacionPorSecuencia?.[0]
+  const nombre = head?.apYNom ?? agentName
+  const sexo = head?.sexo ?? '—'
+  const cuitCuil = head?.cuitCuil ? head.cuitCuil : '—'
 
   const headerBlock = boxedBlock(
     {
@@ -199,11 +331,11 @@ function buildReceiptPage({
                 cell('MES DE PAGO', 'thData'),
               ],
               [
-                cell(agentName || '—', 'tdData'),
+                cell(nombre || '—', 'tdData'),
                 cell('DNI', 'tdData'),
                 cell(documento, 'tdData'),
-                cell('—', 'tdData'),
-                cell('—', 'tdData'),
+                cell(sexo || '—', 'tdData'),
+                cell(cuitCuil, 'tdData'),
                 cell(mesPago(periodo), 'tdData'),
               ],
             ],
@@ -237,14 +369,25 @@ function buildReceiptPage({
             cell('ORDEN DE PAGO', 'thSmall'),
             cell('PESOS', 'thSmall', { alignment: 'right' }),
           ],
-          [
-            cell('—', 'td'),
-            cell('—', 'td'),
-            cell(yyyymm(periodo), 'td'),
-            cell(formatDateDDMMYYYY(now), 'td'),
-            cell('—', 'td'),
-            cell(pesos(total), 'td', { alignment: 'right' }),
-          ],
+          ...(cheques?.liquidPorEstablecimiento?.length
+            ? cheques.liquidPorEstablecimiento.map((r) => [
+                cell(formatEstablecimientoRow(r), 'td'),
+                cell(r.secu == null ? '—' : String(r.secu), 'td'),
+                cell(mesPago(yyyymmToPeriod(r.perOpago) ?? periodo), 'td'),
+                cell(r.fecPago ?? formatDateDDMMYYYY(now), 'td'),
+                cell(r.nombreOpago ? `${r.opid ?? ''} - ${r.nombreOpago}`.trim() : '—', 'td'),
+                cell(pesos(r.liquido ?? 0), 'td', { alignment: 'right' }),
+              ])
+            : [
+                [
+                  cell('—', 'td'),
+                  cell('—', 'td'),
+                  cell(yyyymm(periodo), 'td'),
+                  cell(formatDateDDMMYYYY(now), 'td'),
+                  cell('—', 'td'),
+                  cell(pesos(total), 'td', { alignment: 'right' }),
+                ],
+              ]),
           [
             cell('', 'td', { colSpan: 4 }),
             cell('', 'td'),
@@ -260,147 +403,248 @@ function buildReceiptPage({
     8,
   )
 
-  // Bloques intermedios del recibo real (por ahora placeholders, pero con el encuadre correcto).
-  const caracteristicasBlock = boxedBlock(
-    {
-      stack: [
-        {
-          table: {
-            widths: ['*'],
-            body: [[cell('CARACTERISTICAS DEL ESTABLECIMIENTO', 'sectionBox', { fillColor: '#f9fafb' })]],
-          },
-          layout: boxedLayout,
-          margin: [0, 0, 0, 4],
-        },
-        {
-          table: {
-            headerRows: 1,
-            widths: [75, 80, 75, '*'],
-            body: [
-              [cell('ESTABLEC.', 'thTiny'), cell('CATEGORIA', 'thTiny'), cell('DESFAVOR.', 'thTiny'), cell('SECCIONES', 'thTiny')],
-              [cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny')],
-            ],
-          },
-          layout: boxedLayout,
-          margin: [0, 0, 0, 4],
-        },
-        {
-          table: {
-            headerRows: 1,
-            widths: [70, 75, 60, '*'],
-            body: [
-              [cell('ES CARCEL', 'thTiny'), cell('DOBLE ESC.', 'thTiny'), cell('TURNOS', 'thTiny'), cell('DIRECCIÓN', 'thTiny')],
-              [cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny')],
-            ],
-          },
-          layout: boxedLayout,
-          margin: [0, 0, 0, 4],
-        },
-        {
-          table: {
-            headerRows: 1,
-            widths: [120, '*'],
-            body: [
-              [cell('NOMBRE DEL ESTABLECIMIENTO', 'thTiny'), cell('VALOR', 'thTiny')],
-              [cell('—', 'tdTiny'), cell('—', 'tdTiny')],
-            ],
-          },
-          layout: boxedLayout,
-        },
-      ],
-    },
-    8,
-  )
+  const secuGroups: SecuenciaGroup[] =
+    cheques?.liquidacionPorSecuencia?.length
+      ? groupBySecuencia(cheques.liquidacionPorSecuencia, periodo)
+      : []
 
-  const secuenciaBlock = boxedBlock(
-    {
-      stack: [
-        {
-          table: {
-            widths: ['*'],
-            body: [[cell('SECUENCIA / DATOS DEL CARGO', 'sectionBox', { fillColor: '#f9fafb' })]],
-          },
-          layout: boxedLayout,
-          margin: [0, 0, 0, 4],
-        },
-        {
-          table: {
-            headerRows: 1,
-            widths: [70, 70, '*', 70],
-            body: [
-              [cell('SECUENCIA', 'thTiny'), cell('REVISTA', 'thTiny'), cell('CARGO REAL', 'thTiny'), cell('C.HORARIA', 'thTiny')],
-              [cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny'), cell('—', 'tdTiny')],
-            ],
-          },
-          layout: boxedLayout,
-          margin: [0, 0, 0, 4],
-        },
-        {
-          table: {
-            headerRows: 1,
-            widths: ['*', '*', '*', 75, 95],
-            body: [
-              [
-                cell('APOYO REAL', 'thTiny'),
-                cell('CARGO INT.', 'thTiny'),
-                cell('APOYO INT.', 'thTiny'),
-                cell('PERIODO LIQ.', 'thTiny'),
-                cell('ORDEN DE PAGO', 'thTiny'),
+  const secuenciaBlocks: Content[] =
+    secuGroups.length > 0
+      ? secuGroups.flatMap((g) => {
+          const caracteristicasBlock = boxedBlock(
+            {
+              stack: [
+                {
+                  table: {
+                    widths: ['*'],
+                    body: [[cell('CARACTERISTICAS DEL ESTABLECIMIENTO', 'sectionBox', { fillColor: '#f9fafb' })]],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  table: {
+                    headerRows: 1,
+                    widths: [95, 70, 75, '*'],
+                    body: [
+                      [
+                        cell('ESTABLEC.', 'thTiny'),
+                        cell('CATEGORIA', 'thTiny'),
+                        cell('DESFAVOR.', 'thTiny'),
+                        cell('SECCIONES', 'thTiny'),
+                      ],
+                      [
+                        cell(g.meta.estabCode, 'tdTiny'),
+                        cell(g.meta.categoria, 'tdTiny'),
+                        cell(g.meta.desfavor, 'tdTiny'),
+                        cell(g.meta.secciones, 'tdTiny'),
+                      ],
+                    ],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  table: {
+                    headerRows: 1,
+                    widths: [70, 75, 60, '*'],
+                    body: [
+                      [
+                        cell('ES CARCEL', 'thTiny'),
+                        cell('DOBLE ESC.', 'thTiny'),
+                        cell('TURNOS', 'thTiny'),
+                        cell('DIRECCIÓN', 'thTiny'),
+                      ],
+                      [
+                        cell(g.meta.esCarcel, 'tdTiny'),
+                        cell(g.meta.dobleEscol, 'tdTiny'),
+                        cell(g.meta.turnos, 'tdTiny'),
+                        cell('—', 'tdTiny'),
+                      ],
+                    ],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  table: {
+                    headerRows: 1,
+                    widths: [160, '*'],
+                    body: [
+                      [cell('NOMBRE DEL ESTABLECIMIENTO', 'thTiny'), cell('VALOR', 'thTiny')],
+                      [cell(g.meta.nombreEstab, 'tdTiny'), cell('—', 'tdTiny')],
+                    ],
+                  },
+                  layout: boxedLayout,
+                },
               ],
-              [
-                cell('—', 'tdTiny'),
-                cell('—', 'tdTiny'),
-                cell('—', 'tdTiny'),
-                cell(yyyymm(periodo), 'tdTiny'),
-                cell('—', 'tdTiny'),
-              ],
-            ],
-          },
-          layout: boxedLayout,
-        },
-      ],
-    },
-    8,
-  )
+            },
+            8,
+          )
 
-  const conceptosBlock = boxedBlock(
-    {
-      table: {
-        headerRows: 1,
-        widths: [40, '*', 80, 80],
-        body: [
-          [
-            cell('COD', 'thSmall'),
-            cell('HABERES', 'thSmall'),
-            cell('Haberes', 'thSmall', { alignment: 'right' }),
-            cell('Descuentos', 'thSmall', { alignment: 'right' }),
-          ],
-          ...[...haberes, ...descuentos].map((it) => [
-            cell('', 'td'),
-            cell(it.concepto, 'td'),
-            cell(it.importe >= 0 ? pesos(it.importe) : '', 'td', { alignment: 'right' }),
-            cell(it.importe < 0 ? pesos(it.importe) : '', 'td', { alignment: 'right' }),
-          ]),
-        ],
-      },
-      layout: boxedLayout,
-    },
-    10,
-  )
+          const secuenciaBlock = boxedBlock(
+            {
+              stack: [
+                {
+                  table: {
+                    widths: ['*'],
+                    body: [[cell('SECUENCIA / DATOS DEL CARGO', 'sectionBox', { fillColor: '#f9fafb' })]],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  table: {
+                    headerRows: 1,
+                    widths: [70, 70, '*', 70],
+                    body: [
+                      [
+                        cell('SECUENCIA', 'thTiny'),
+                        cell('REVISTA', 'thTiny'),
+                        cell('CARGO REAL', 'thTiny'),
+                        cell('C.HORARIA', 'thTiny'),
+                      ],
+                      [
+                        cell(g.meta.secuencia, 'tdTiny'),
+                        cell(g.meta.revista, 'tdTiny'),
+                        cell(g.meta.cargoReal, 'tdTiny'),
+                        cell(g.meta.choraria, 'tdTiny'),
+                      ],
+                    ],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  table: {
+                    headerRows: 1,
+                    widths: ['*', '*', '*', 75, 120],
+                    body: [
+                      [
+                        cell('APOYO REAL', 'thTiny'),
+                        cell('CARGO INT.', 'thTiny'),
+                        cell('APOYO INT.', 'thTiny'),
+                        cell('PERIODO LIQ.', 'thTiny'),
+                        cell('ORDEN DE PAGO', 'thTiny'),
+                      ],
+                      [
+                        cell(g.meta.apoyoReal, 'tdTiny'),
+                        cell(g.meta.cargoInt, 'tdTiny'),
+                        cell(g.meta.apoyoInt, 'tdTiny'),
+                        cell(g.meta.periodoLiq, 'tdTiny'),
+                        cell(g.meta.ordenPago, 'tdTiny'),
+                      ],
+                    ],
+                  },
+                  layout: boxedLayout,
+                },
+              ],
+            },
+            8,
+          )
+
+          const conceptosBlock = boxedBlock(
+            {
+              table: {
+                headerRows: 1,
+                widths: [55, '*', 80, 80],
+                body: [
+                  [
+                    cell('COD', 'thSmall'),
+                    cell('HABERES', 'thSmall'),
+                    cell('Haberes', 'thSmall', { alignment: 'right' }),
+                    cell('Descuentos', 'thSmall', { alignment: 'right' }),
+                  ],
+                  ...groupCodes(g.items).map((c) => [
+                    cell(c.codigo || '', 'td'),
+                    cell(c.desc, 'td'),
+                    cell(c.amount >= 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
+                    cell(c.amount < 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
+                  ]),
+                ],
+              },
+              layout: boxedLayout,
+            },
+            10,
+          )
+
+          return [
+            {
+              stack: [caracteristicasBlock, secuenciaBlock, conceptosBlock],
+              unbreakable: true,
+            },
+          ]
+        })
+      : [
+          // Fallback: si no hay secuencias, mantenemos tabla de conceptos desde items normalizados.
+          boxedBlock(
+            {
+              table: {
+                headerRows: 1,
+                widths: [40, '*', 80, 80],
+                body: [
+                  [
+                    cell('COD', 'thSmall'),
+                    cell('HABERES', 'thSmall'),
+                    cell('Haberes', 'thSmall', { alignment: 'right' }),
+                    cell('Descuentos', 'thSmall', { alignment: 'right' }),
+                  ],
+                  ...[...haberes, ...descuentos].map((it) => [
+                    cell('', 'td'),
+                    cell(it.concepto, 'td'),
+                    cell(it.importe >= 0 ? pesos(it.importe) : '', 'td', { alignment: 'right' }),
+                    cell(it.importe < 0 ? pesos(it.importe) : '', 'td', { alignment: 'right' }),
+                  ]),
+                ],
+              },
+              layout: boxedLayout,
+            },
+            10,
+          ),
+        ]
+
+  const messagesBlock: Content[] =
+    cheques?.mensajeria?.mensajeGeneral?.length || cheques?.mensajeria?.mensajesPersonalizados?.length
+      ? [
+          boxedBlock(
+            {
+              stack: [
+                {
+                  table: { widths: ['*'], body: [[cell('MENSAJE GENERAL', 'sectionBox', { fillColor: '#f9fafb' })]] },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                { text: linesOrDash(cheques?.mensajeria?.mensajeGeneral), style: 'tdTiny', margin: [2, 0, 2, 6] },
+                {
+                  table: {
+                    widths: ['*'],
+                    body: [[cell('MENSAJES PERSONALIZADOS', 'sectionBox', { fillColor: '#f9fafb' })]],
+                  },
+                  layout: boxedLayout,
+                  margin: [0, 0, 0, 4],
+                },
+                {
+                  text: linesOrDash(cheques?.mensajeria?.mensajesPersonalizados),
+                  style: 'tdTiny',
+                  margin: [2, 0, 2, 0],
+                },
+              ],
+            },
+            10,
+          ),
+        ]
+      : []
 
   // Texto legal: al final de cada resumen (página), sin romper el pie de página.
-  const legalInline: Content = {
-    text: RECEIPT_FOOTER_TEXT,
-    style: 'legalInline',
-    margin: [0, 2, 0, 0],
-  }
+  const legalInline: Content = { text: RECEIPT_FOOTER_TEXT, style: 'legalInline', margin: [0, 2, 0, 0] }
 
-  return [headerBlock, liquidosBlock, caracteristicasBlock, secuenciaBlock, conceptosBlock, legalInline]
+  return [headerBlock, liquidosBlock, ...secuenciaBlocks, ...messagesBlock, legalInline]
 }
 
 // Nuevo requerimiento: generar 1 PDF por agente (descarga múltiple)
 export function buildAgentPdfs(
   normalized: NormalizedPayroll,
+  chequesByKey?: Record<string, ChequesBundle>,
   selectedAgents?: string[],
   selectedPeriods?: string[],
 ): AgentPdf[] {
@@ -424,7 +668,16 @@ export function buildAgentPdfs(
     for (let i = 0; i < periods.length; i += 1) {
       const p = periods[i]
       const pageItems = items.filter((it) => it.periodo === p)
-      content.push(...buildReceiptPage({ documento: cuil, periodo: p, items: pageItems, agentName }))
+      const key = `${cuil}-${p.replace('-', '')}`
+      content.push(
+        ...buildReceiptPage({
+          documento: cuil,
+          periodo: p,
+          items: pageItems,
+          agentName,
+          cheques: chequesByKey?.[key],
+        }),
+      )
       if (i < periods.length - 1) content.push({ text: ' ', pageBreak: 'after' })
     }
 
@@ -435,6 +688,7 @@ export function buildAgentPdfs(
 // Nuevo requerimiento: generar 1 PDF por período (descarga múltiple)
 export function buildPeriodPdfs(
   normalized: NormalizedPayroll,
+  chequesByKey?: Record<string, ChequesBundle>,
   selectedAgents?: string[],
   selectedPeriods?: string[],
 ): PeriodPdf[] {
@@ -457,7 +711,16 @@ export function buildPeriodPdfs(
       const docId = documentos[i]
       const pageItems = items.filter((it) => it.cuil === docId)
       const agentName = normalized.agents.find((a) => a.cuil === docId)?.nombre ?? ''
-      content.push(...buildReceiptPage({ documento: docId, periodo, items: pageItems, agentName }))
+      const key = `${docId}-${periodo.replace('-', '')}`
+      content.push(
+        ...buildReceiptPage({
+          documento: docId,
+          periodo,
+          items: pageItems,
+          agentName,
+          cheques: chequesByKey?.[key],
+        }),
+      )
       if (i < documentos.length - 1) content.push({ text: ' ', pageBreak: 'after' })
     }
 

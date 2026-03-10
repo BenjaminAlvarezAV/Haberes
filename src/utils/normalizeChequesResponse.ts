@@ -1,0 +1,142 @@
+import { z } from 'zod'
+import type {
+  LiquidPorEstablecimientoItem,
+  LiquidacionPorSecuenciaItem,
+  MensajeriaMessages,
+} from '../types/cheques'
+
+const objSchema = z.object({}).catchall(z.unknown())
+
+function toString(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return null
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\./g, '').replace(',', '.').trim()
+    const n = Number(normalized)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function pickFirst<T>(
+  obj: Record<string, unknown>,
+  keys: readonly string[],
+  map: (v: unknown) => T | null,
+): T | null {
+  for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(obj, k)) continue
+    const mapped = map(obj[k])
+    if (mapped !== null) return mapped
+  }
+  return null
+}
+
+function extractLiquidArray(raw: unknown): unknown[] {
+  const parsed = objSchema.safeParse(raw)
+  if (!parsed.success) return []
+  const liquid = (parsed.data as Record<string, unknown>)['liquid']
+  return Array.isArray(liquid) ? liquid : []
+}
+
+export function normalizeLiquidPorEstablecimiento(raw: unknown): LiquidPorEstablecimientoItem[] {
+  const arr = extractLiquidArray(raw)
+  const out: LiquidPorEstablecimientoItem[] = []
+  for (const entry of arr) {
+    const parsed = objSchema.safeParse(entry)
+    if (!parsed.success) continue
+    const o = parsed.data
+    out.push({
+      distrito: pickFirst(o, ['distrito'], (v) => (typeof v === 'number' ? v : toNumber(v))),
+      tipoOrg: pickFirst(o, ['tipoOrg'], toString),
+      numero: pickFirst(o, ['numero'], (v) => toString(v)),
+      nombreEstab: pickFirst(o, ['nombreEstab'], toString),
+      secu: pickFirst(o, ['secu'], (v) => toString(v)),
+      perOpago: pickFirst(o, ['perOpago'], toString),
+      nombreOpago: pickFirst(o, ['nombreOpago'], toString),
+      liquido: pickFirst(o, ['liquido'], toNumber),
+      fecPago: pickFirst(o, ['fecPago', 'fPago'], toString),
+      opid: pickFirst(o, ['opid', 'opid'], (v) => toString(v)),
+    })
+  }
+  return out
+}
+
+export function normalizeLiquidacionPorSecuencia(raw: unknown): LiquidacionPorSecuenciaItem[] {
+  const arr = extractLiquidArray(raw)
+  const out: LiquidacionPorSecuenciaItem[] = []
+  for (const entry of arr) {
+    const parsed = objSchema.safeParse(entry)
+    if (!parsed.success) continue
+    const o = parsed.data
+    out.push({
+      apYNom: pickFirst(o, ['apYNom', 'apynom', 'apellidoNombre'], toString),
+      numDoc: pickFirst(o, ['numDoc', 'documento'], toString),
+      sexo: pickFirst(o, ['sexo'], toString),
+      cuitCuil: pickFirst(o, ['cuitCuil', 'cuil', 'cuit'], toString),
+      mesaPago: pickFirst(o, ['mesaPago', 'mesPago'], toString),
+      tipoOrg: pickFirst(o, ['tipoOrg'], toString),
+      numero: pickFirst(o, ['numero'], toString),
+      nombreEstab: pickFirst(o, ['nombreEstab'], toString),
+      secu: pickFirst(o, ['secu'], toString),
+      rev: pickFirst(o, ['rev'], toString),
+      cat: pickFirst(o, ['cat'], toString),
+      rural: pickFirst(o, ['rural'], toString),
+      secciones: pickFirst(o, ['secciones'], toString),
+      turnos: pickFirst(o, ['turnos'], toString),
+      dobEscolEstab: pickFirst(o, ['dobEscolEstab', 'dobEscol'], toString),
+      codigo: pickFirst(o, ['codigo', 'cod'], toString),
+      descripcionCodigo: pickFirst(o, ['descripcionCodigo', 'desc', 'descripcion'], toString),
+      pesos: pickFirst(o, ['pesos', 'importe', 'monto'], toNumber),
+      oPid: pickFirst(o, ['oPid', 'opid'], toString),
+      fecAfec: pickFirst(o, ['fecAfec', 'perOpago', 'periodo'], toString),
+    })
+  }
+  return out
+}
+
+export function normalizeMensajeria(raw: unknown): MensajeriaMessages {
+  const parsed = objSchema.safeParse(raw)
+  if (!parsed.success) return { mensajeGeneral: [], mensajesPersonalizados: [] }
+  const r = parsed.data as Record<string, unknown>
+  const container =
+    (r['data'] as unknown) ??
+    (r['result'] as unknown) ??
+    (r['resultado'] as unknown) ??
+    raw
+  const p2 = objSchema.safeParse(container)
+  const c = p2.success ? (p2.data as Record<string, unknown>) : r
+
+  const mg = c['mensajeGeneral'] ?? c['MensajeGeneral'] ?? c['general'] ?? c['General'] ?? []
+  const mp =
+    c['mensajesPersonalizados'] ??
+    c['MensajesPersonalizados'] ??
+    c['personalizados'] ??
+    c['Personalizados'] ??
+    []
+
+  const toList = (v: unknown): string[] => {
+    if (!Array.isArray(v)) return []
+    const out: string[] = []
+    for (const e of v) {
+      const s = toString(e)
+      if (s) out.push(s)
+      else {
+        const eo = objSchema.safeParse(e)
+        if (eo.success) {
+          const msg =
+            pickFirst(eo.data, ['mensaje', 'texto', 'descripcion', 'detalle', 'valor'], toString) ?? null
+          if (msg) out.push(msg)
+        }
+      }
+    }
+    return out
+  }
+
+  return { mensajeGeneral: toList(mg), mensajesPersonalizados: toList(mp) }
+}
+

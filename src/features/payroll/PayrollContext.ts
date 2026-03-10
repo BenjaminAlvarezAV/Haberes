@@ -2,15 +2,24 @@ import { createContext } from 'react'
 import type { AppError } from '../../types/errors'
 import type { ParseCuilReport } from '../../utils/txtParser'
 import type { GroupMode, NormalizedPayroll } from '../../types/payroll'
+import type { ChequesBundle } from '../../types/cheques'
 import type { PayrollAction } from './payrollReducer'
+import type { QueryMode } from './payrollReducer'
 
 export interface PayrollStateShape {
   cuils: string[]
+  availablePeriodos: string[]
   periodos: string[]
+  queryMode: QueryMode
+  manualCuil: string
+  manualMonth: string
+  manualFrom: string
+  manualTo: string
   groupMode: GroupMode
   loading: boolean
   error: AppError | null
   data: NormalizedPayroll | null
+  chequesByKey: Record<string, ChequesBundle>
   lastUploadReport: ParseCuilReport | null
 }
 

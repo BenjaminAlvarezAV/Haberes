@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import JSZip from 'jszip'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
@@ -14,6 +14,7 @@ import type { AgentPdf, PeriodPdf } from '../../pdf/builders'
 import { createPdfBase64, downloadBlob } from '../../pdf/render'
 import { groupByAgent, groupByPeriod } from '../../utils/grouping'
 import type { GroupedByAgent, GroupedByPeriod } from '../../utils/grouping'
+import { expandPeriodRange } from '../../utils/period'
 
 type PdfEntry = AgentPdf | PeriodPdf
 
@@ -31,11 +32,6 @@ function isGroupedByPeriod(grouped: GroupedByAgent | GroupedByPeriod | null): gr
 
 function pdfFilename(pdf: PdfEntry): string {
   return 'cuil' in pdf ? `haberes-${pdf.cuil}.pdf` : `haberes-${pdf.periodo}.pdf`
-}
-
-function matchesSearch(value: string, term: string): boolean {
-  if (!term) return true
-  return value.toLowerCase().includes(term)
 }
 
 const PDF_TIMEOUT_MS = 60000
@@ -58,11 +54,18 @@ async function createPdfBase64WithTimeout(doc: PdfEntry['doc'], ms: number): Pro
 export function PayrollPage() {
   const {
     cuils,
+    availablePeriodos,
     periodos,
+    queryMode,
+    manualCuil,
+    manualMonth,
+    manualFrom,
+    manualTo,
     groupMode,
     loading,
     error,
     data,
+    chequesByKey,
     dispatch,
     consult,
     lastUploadReport,
@@ -70,7 +73,9 @@ export function PayrollPage() {
 
   const [pdfOpen, setPdfOpen] = useState(false)
   const [previewIndex, setPreviewIndex] = useState(0)
-  const [searchTerm, setSearchTerm] = useState('')
+  const [agentSearch, setAgentSearch] = useState('')
+  // Usamos input type="date" para selección (día/mes/año) y derivamos YYYY-MM para filtrar.
+  const [periodSearchDate, setPeriodSearchDate] = useState('')
   const [pageIndex, setPageIndex] = useState(0)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadingZip, setDownloadingZip] = useState(false)
@@ -79,48 +84,84 @@ export function PayrollPage() {
   )
   const [zipSkipped, setZipSkipped] = useState<string[]>([])
 
-  const grouped = useMemo(() => {
-    if (!data) return null
-    return groupMode === 'agent' ? groupByAgent(data) : groupByPeriod(data)
-  }, [data, groupMode])
+  const normalizedAgentSearch = useMemo(() => agentSearch.trim().toLowerCase(), [agentSearch])
+  const normalizedPeriodSearch = useMemo(() => {
+    const raw = periodSearchDate.trim()
+    // YYYY-MM-DD -> YYYY-MM
+    return raw.length >= 7 ? raw.slice(0, 7).toLowerCase() : ''
+  }, [periodSearchDate])
 
-  const normalizedSearch = useMemo(() => searchTerm.trim().toLowerCase(), [searchTerm])
-  const agentPdfs = useMemo(() => (data ? buildAgentPdfs(data) : []), [data])
-  const periodPdfs = useMemo(() => (data ? buildPeriodPdfs(data) : []), [data])
-  const allPdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
-  const pdfs = useMemo(() => {
-    if (!normalizedSearch) return allPdfs
-    return allPdfs.filter((pdf) =>
-      matchesSearch('cuil' in pdf ? pdf.cuil : pdf.periodo, normalizedSearch),
-    )
-  }, [allPdfs, normalizedSearch])
+  // Filtro dual: aplica en paralelo por agente/documento y por período (independiente del modo).
+  const filteredData = useMemo(() => {
+    if (!data) return null
+
+    let items = data.items
+    if (normalizedAgentSearch) {
+      items = items.filter((it) => it.cuil.toLowerCase().includes(normalizedAgentSearch))
+    }
+    if (normalizedPeriodSearch) {
+      items = items.filter((it) => it.periodo.toLowerCase().includes(normalizedPeriodSearch))
+    }
+
+    const used = new Set(items.map((it) => it.cuil))
+    const agents = data.agents.filter((a) => used.has(a.cuil))
+
+    return { ...data, items, agents }
+  }, [data, normalizedAgentSearch, normalizedPeriodSearch])
+
+  const grouped = useMemo(() => {
+    if (!filteredData) return null
+    return groupMode === 'agent' ? groupByAgent(filteredData) : groupByPeriod(filteredData)
+  }, [filteredData, groupMode])
+
+  const agentPdfs = useMemo(
+    () => (filteredData ? buildAgentPdfs(filteredData, chequesByKey) : []),
+    [filteredData, chequesByKey],
+  )
+  const periodPdfs = useMemo(
+    () => (filteredData ? buildPeriodPdfs(filteredData, chequesByKey) : []),
+    [filteredData, chequesByKey],
+  )
+  const pdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
   const preview = pdfs[previewIndex] ?? null
 
-  const filteredAgentKeys = useMemo(() => {
-    if (!isGroupedByAgent(grouped)) return []
-    if (!normalizedSearch) return grouped.orderedCuils
-    return grouped.orderedCuils.filter((cuil) => matchesSearch(cuil, normalizedSearch))
-  }, [grouped, normalizedSearch])
+  const keys = useMemo(() => {
+    if (groupMode === 'agent') return isGroupedByAgent(grouped) ? grouped.orderedCuils : []
+    return isGroupedByPeriod(grouped) ? grouped.orderedPeriods : []
+  }, [groupMode, grouped])
 
-  const filteredPeriodKeys = useMemo(() => {
-    if (!isGroupedByPeriod(grouped)) return []
-    if (!normalizedSearch) return grouped.orderedPeriods
-    return grouped.orderedPeriods.filter((period) => matchesSearch(period, normalizedSearch))
-  }, [grouped, normalizedSearch])
-
-  const totalPages = groupMode === 'agent' ? filteredAgentKeys.length : filteredPeriodKeys.length
-  const currentKey =
-    groupMode === 'agent' ? filteredAgentKeys[pageIndex] : filteredPeriodKeys[pageIndex]
+  const totalPages = keys.length
+  const currentKey = keys[pageIndex] ?? null
 
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
       // Guardamos documentos en el estado (reutilizamos cuils como identificador)
       dispatch({ type: 'SET_CUILS', payload: { cuils: payload.documentos, report: payload.report } })
-      // Derivamos períodos del CSV y los seteamos (editable desde el selector)
-      dispatch({ type: 'SET_PERIODOS', payload: payload.periodos })
+      // Derivamos períodos del CSV y los seteamos como "disponibles" + seleccionados por defecto.
+      dispatch({ type: 'SET_AVAILABLE_PERIODOS', payload: payload.periodos })
     },
     [dispatch],
   )
+
+  const manualIdValid = useMemo(() => {
+    const v = manualCuil.trim()
+    return /^\d+$/.test(v) && (v.length === 8 || v.length === 11)
+  }, [manualCuil])
+
+  const manualPeriodos = useMemo(() => {
+    if (availablePeriodos.length === 0) return []
+    const setAvailable = new Set(availablePeriodos)
+    // Mes siempre visible (obligatorio); rango opcional.
+    if (manualFrom && manualTo) {
+      const desired = expandPeriodRange(manualFrom, manualTo)
+      return desired.filter((p) => setAvailable.has(p))
+    }
+    if (!manualMonth) return []
+    return setAvailable.has(manualMonth) ? [manualMonth] : []
+  }, [manualFrom, manualTo, manualMonth, availablePeriodos])
+
+  const effectiveDocCount = queryMode === 'manual' ? (manualIdValid ? 1 : 0) : cuils.length
+  const effectivePeriodCount = queryMode === 'manual' ? manualPeriodos.length : periodos.length
 
   useEffect(() => {
     if (previewIndex >= pdfs.length && pdfs.length > 0) {
@@ -134,20 +175,31 @@ export function PayrollPage() {
     }
   }, [pageIndex, totalPages])
 
+  useEffect(() => {
+    // Al cambiar filtros, volvemos al inicio para que el usuario no “caiga” en una página vacía.
+    setPageIndex(0)
+    setPreviewIndex(0)
+  }, [normalizedAgentSearch, normalizedPeriodSearch])
+
+  const clearFilters = useCallback(() => {
+    setAgentSearch('')
+    setPeriodSearchDate('')
+    setPageIndex(0)
+    setPreviewIndex(0)
+  }, [])
+
   const downloadAllPdfs = useCallback(async () => {
-    if (!data) return
+    if (!filteredData) return
 
     try {
       setDownloadError(null)
       setDownloadingZip(true)
       setZipProgress(null)
       setZipSkipped([])
-      let docs: PdfEntry[] = groupMode === 'agent' ? buildAgentPdfs(data) : buildPeriodPdfs(data)
-      if (normalizedSearch) {
-        docs = docs.filter((pdf) =>
-          matchesSearch('cuil' in pdf ? pdf.cuil : pdf.periodo, normalizedSearch),
-        )
-      }
+      const docs: PdfEntry[] =
+        groupMode === 'agent'
+          ? buildAgentPdfs(filteredData, chequesByKey)
+          : buildPeriodPdfs(filteredData, chequesByKey)
       if (docs.length === 0) return
 
       const zip = new JSZip()
@@ -199,7 +251,7 @@ export function PayrollPage() {
       setDownloadingZip(false)
       setZipProgress(null)
     }
-  }, [data, groupMode, normalizedSearch])
+  }, [filteredData, groupMode, chequesByKey])
 
   return (
     <div className="min-h-screen bg-gray-100 px-4 py-8">
@@ -216,18 +268,139 @@ export function PayrollPage() {
             <CuilUploader onParsed={onCsvParsed} />
 
             <div className="space-y-4">
-              <PeriodSelector
-                value={periodos}
-                onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
-              />
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900">Modo de carga</h4>
+                    <p className="text-xs text-gray-600">
+                      Elegí cómo querés consultar y generar los PDFs (CSV obligatorio).
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={queryMode === 'batch' ? 'primary' : 'secondary'}
+                      onClick={() => dispatch({ type: 'SET_QUERY_MODE', payload: 'batch' })}
+                      disabled={cuils.length === 0}
+                    >
+                      Lote (CSV)
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={queryMode === 'manual' ? 'primary' : 'secondary'}
+                      onClick={() => dispatch({ type: 'SET_QUERY_MODE', payload: 'manual' })}
+                      disabled={cuils.length === 0}
+                    >
+                      Manual (CUIL + rango)
+                    </Button>
+                  </div>
+                </div>
+
+                {queryMode === 'batch' ? (
+                  <PeriodSelector
+                    value={periodos}
+                    available={availablePeriodos}
+                    onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-900">
+                        CUIL/DNI (sin guiones)
+                      </label>
+                      <div className="mt-1">
+                        <Input
+                          value={manualCuil}
+                          inputMode="numeric"
+                          pattern="\d*"
+                          maxLength={11}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(/[^\d]/g, '')
+                            dispatch({ type: 'SET_MANUAL_CUIL', payload: next })
+                          }}
+                          placeholder="Ingresá un único CUIL (11) o DNI (8)…"
+                        />
+                      </div>
+                      <p className="mt-1 text-xs text-gray-600">
+                        {manualCuil.trim().length === 0 ? (
+                          <>Ingresá un único valor (solo números).</>
+                        ) : manualIdValid ? (
+                          <>CUIL/DNI válido.</>
+                        ) : (
+                          <>Debe tener 8 (DNI) o 11 (CUIL) dígitos.</>
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-900">Período (mes)</label>
+                        <div className="mt-1">
+                          <Input
+                            type="month"
+                            value={manualMonth}
+                            onChange={(e) =>
+                              dispatch({ type: 'SET_MANUAL_MONTH', payload: e.target.value })
+                            }
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-gray-600">Obligatorio.</p>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-900">
+                            Rango desde (opcional)
+                          </label>
+                          <div className="mt-1">
+                            <Input
+                              type="month"
+                              value={manualFrom}
+                              onChange={(e) =>
+                                dispatch({
+                                  type: 'SET_MANUAL_RANGE',
+                                  payload: { from: e.target.value, to: manualTo },
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-900">
+                            Rango hasta (opcional)
+                          </label>
+                          <div className="mt-1">
+                            <Input
+                              type="month"
+                              value={manualTo}
+                              onChange={(e) =>
+                                dispatch({
+                                  type: 'SET_MANUAL_RANGE',
+                                  payload: { from: manualFrom, to: e.target.value },
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-600">
+                        Si completás DESDE y HASTA, se usa el rango; si no, se usa el mes.
+                      </p>
+                    </div>
+                    <p className="text-xs text-gray-600">
+                      Períodos seleccionados (según CSV): <span className="font-medium">{manualPeriodos.length}</span>
+                    </p>
+                  </div>
+                )}
+              </div>
 
               <div className="flex flex-wrap items-center gap-3">
                 <Button type="button" onClick={() => void consult()} disabled={loading}>
                   {loading ? 'Consultando' : 'Consultar'}
                 </Button>
                 <div className="text-sm text-gray-700">
-                  <span className="font-medium">{cuils.length}</span> documentos {' '}
-                  <span className="font-medium">{periodos.length}</span> período(s)
+                  <span className="font-medium">{effectiveDocCount}</span> documentos {' '}
+                  <span className="font-medium">{effectivePeriodCount}</span> período(s)
                 </div>
               </div>
 
@@ -255,16 +428,32 @@ export function PayrollPage() {
                 onChange={(mode) => dispatch({ type: 'SET_GROUP_MODE', payload: mode })}
               />
 
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-4">
                 <Input
-                  value={searchTerm}
+                  value={agentSearch}
                   onChange={(event) => {
-                    setSearchTerm(event.target.value)
-                    setPageIndex(0)
-                    setPreviewIndex(0)
+                    setAgentSearch(event.target.value)
                   }}
-                  placeholder={groupMode === 'agent' ? 'Buscar por CUIL…' : 'Buscar por período (YYYY-MM)…'}
+                  placeholder="Buscar por documento/agente…"
                 />
+                <Input
+                  type="date"
+                  value={periodSearchDate}
+                  onChange={(event) => {
+                    setPeriodSearchDate(event.target.value)
+                  }}
+                  aria-label="Buscar por período (seleccionando una fecha)"
+                  className="tabular-nums"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={clearFilters}
+                  disabled={!agentSearch.trim() && !periodSearchDate.trim()}
+                  className="h-8 self-end px-2 text-[11px] leading-none ring-1 ring-gray-200"
+                >
+                  Limpiar filtros
+                </Button>
                 <div className="flex items-center gap-2 text-xs text-gray-600">
                   <span>
                     {totalPages === 0

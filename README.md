@@ -27,6 +27,7 @@ Copiá `env.example` a `.env` y ajustá:
 
 - **`VITE_API_BASE_URL`**: base URL del backend (si está vacío, se usa **mock** de 1s).
 - **`VITE_PAYROLL_PATH`**: path del endpoint (default `/payroll`).
+- **`VITE_CHEQUES_PROXY_TARGET`**: target del proxy de Vite para endpoints `/wsstestsigue/cheques/*` (dev). En prod, usar reverse proxy/backend.
 
 ## Arquitectura (src/)
 
