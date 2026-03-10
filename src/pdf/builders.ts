@@ -89,6 +89,7 @@ type SecuenciaGroup = {
     apoyoInt: string
     periodoLiq: string
     ordenPago: string
+    direccion: string
   }
   items: LiquidacionPorSecuenciaItem[]
 }
@@ -117,18 +118,19 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
           categoria: it.cat ?? '—',
           desfavor: yesNoFromFlag(it.rural),
           secciones: it.secciones ?? '—',
-          esCarcel: yesNoFromFlag(null),
+          esCarcel: yesNoFromFlag(it.esCarcel),
           dobleEscol: yesNoFromFlag(it.dobEscolEstab),
           turnos: it.turnos ?? '—',
           secuencia: secu || '—',
           revista: rev || '—',
-          cargoReal: '—',
-          choraria: '—',
-          apoyoReal: '—',
-          cargoInt: '—',
-          apoyoInt: '—',
+          cargoReal: it.cargoReal ?? '—',
+          choraria: it.choraria ?? '—',
+          apoyoReal: it.apoyoReal ?? '—',
+          cargoInt: it.cargoInt ?? '—',
+          apoyoInt: it.apoyoInt ?? '—',
           periodoLiq: mesPago(periodoLiq),
           ordenPago: oPid ? `ORDEN DE PAGO: ${oPid}` : '—',
+          direccion: it.direccion ?? '—',
         },
         items: [],
       })
@@ -459,7 +461,7 @@ function buildReceiptPage({
                         cell(g.meta.esCarcel, 'tdTiny'),
                         cell(g.meta.dobleEscol, 'tdTiny'),
                         cell(g.meta.turnos, 'tdTiny'),
-                        cell('—', 'tdTiny'),
+                        cell(g.meta.direccion, 'tdTiny'),
                       ],
                     ],
                   },

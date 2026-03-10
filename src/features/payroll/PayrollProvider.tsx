@@ -1,4 +1,4 @@
-﻿import { useCallback, useMemo, useReducer } from 'react'
+import { useCallback, useMemo, useReducer } from 'react'
 import type { ReactNode } from 'react'
 import { fetchPayroll } from '../../services/payrollService'
 import { fetchChequesForPairs } from '../../services/chequesService'
@@ -93,18 +93,47 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
     dispatch({ type: 'FETCH_START' })
     try {
+      dispatch({ type: 'SET_FETCH_PROGRESS', payload: { label: 'Consultando haberes…', current: 0, total: 1 } })
       // 1) Consultamos haberes (base) para la UI.
       const normalized = await fetchPayroll(effective.cuils, effective.periodos)
+      dispatch({ type: 'SET_FETCH_PROGRESS', payload: { label: 'Consultando haberes…', current: 1, total: 1 } })
 
       // 2) Consultamos todos los endpoints de cheques para completar el PDF.
       // Se hace en cada consulta (requerimiento).
-      const pairs = effective.cuils.flatMap((id) =>
-        effective.periodos.map((p) => ({ id, periodoYYYYMM: p.replace('-', '') })),
-      )
-      const chequesMap = await fetchChequesForPairs(pairs, { concurrency: 6 })
+      const pairKeys = new Set<string>()
+      const pairs = normalized.items
+        .map((it) => ({ id: it.cuil, periodoYYYYMM: it.periodo.replace('-', '') }))
+        .filter((pair) => {
+          const key = `${pair.id}-${pair.periodoYYYYMM}`
+          if (pairKeys.has(key)) return false
+          pairKeys.add(key)
+          return true
+        })
+        .filter((pair) => {
+          const existing = state.chequesByKey[`${pair.id}-${pair.periodoYYYYMM}`]
+          return !existing || (existing.errors && existing.errors.length > 0)
+        })
+      dispatch({
+        type: 'SET_FETCH_PROGRESS',
+        payload: { label: 'Consultando cheques…', current: 0, total: pairs.length },
+      })
+      const chequesMap =
+        pairs.length > 0
+          ? await fetchChequesForPairs(pairs, {
+              concurrency: 6,
+              onProgress: (current, total) => {
+                dispatch({
+                  type: 'SET_FETCH_PROGRESS',
+                  payload: { label: 'Consultando cheques…', current, total },
+                })
+              },
+            })
+          : {}
 
       dispatch({ type: 'FETCH_SUCCESS', payload: normalized })
-      dispatch({ type: 'SET_CHEQUES_MAP', payload: chequesMap })
+      if (Object.keys(chequesMap).length > 0) {
+        dispatch({ type: 'SET_CHEQUES_MAP', payload: chequesMap })
+      }
     } catch (e: unknown) {
       dispatch({ type: 'FETCH_ERROR', payload: toAppError(e) })
     }
@@ -117,6 +146,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
     state.manualFrom,
     state.manualTo,
     state.availablePeriodos,
+    state.chequesByKey,
   ])
 
   const value = useMemo<PayrollContextValue>(

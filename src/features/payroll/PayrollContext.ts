@@ -21,6 +21,7 @@ export interface PayrollStateShape {
   data: NormalizedPayroll | null
   chequesByKey: Record<string, ChequesBundle>
   lastUploadReport: ParseCuilReport | null
+  fetchProgress: { label: string; current: number; total: number } | null
 }
 
 export interface PayrollContextValue extends PayrollStateShape {

@@ -37,6 +37,13 @@ export interface LiquidacionPorSecuenciaItem {
   secciones: string | null
   turnos: string | null
   dobEscolEstab: string | null
+  esCarcel: string | null
+  direccion: string | null
+  cargoReal: string | null
+  choraria: string | null
+  apoyoReal: string | null
+  cargoInt: string | null
+  apoyoInt: string | null
 
   // Detalle de haberes/descuentos
   codigo: string | null

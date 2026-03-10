@@ -1,4 +1,4 @@
-﻿import { isLikelyCuil, normalizeCuil } from './cuil'
+import { isLikelyCuil, normalizeCuil } from './cuil'
 import { currentYYYYMM, isFutureYYYYMM, isValidYYYYMM } from './period'
 
 export interface ParseCuilOptions {
@@ -10,6 +10,8 @@ export interface ParseCuilReport {
   valid: number
   invalid: number
   duplicates: number
+  parseMs?: number
+  rowsPerSec?: number
 }
 
 export interface ParseCuilResult {
@@ -34,10 +36,20 @@ export interface ParseSercopeCsvResult {
   duplicateRows: string[]
 }
 
+export interface ParseProgress {
+  percent: number
+  rows: number
+}
+
+export interface ParseSercopeCsvOptions {
+  onProgress?: (progress: ParseProgress) => void
+}
+
 export function parseCuilTextDetailed(
   text: string,
   options: ParseCuilOptions = {},
 ): ParseCuilResult {
+  const startMs = Date.now()
   const minLength = options.minLength ?? 11
 
   const lines = text.split(/\r?\n/)
@@ -65,6 +77,7 @@ export function parseCuilTextDetailed(
     cuils.push(cuil)
   }
 
+  const parseMs = Date.now() - startMs
   return {
     cuils,
     invalidLines,
@@ -74,6 +87,8 @@ export function parseCuilTextDetailed(
       valid: cuils.length,
       invalid: invalidLines.length,
       duplicates: duplicateCuils.length,
+      parseMs,
+      rowsPerSec: lines.length > 0 ? Math.round((lines.length / Math.max(1, parseMs)) * 1000) : 0,
     },
   }
 }
@@ -95,6 +110,7 @@ export function parseSercopeCsvTextDetailed(
   text: string,
   maxYYYYMM: string = currentYYYYMM(),
 ): ParseSercopeCsvResult {
+  const startMs = Date.now()
   const lines = text.split(/\r?\n/)
   const seenRows = new Set<string>()
   const seenDocs = new Set<string>()
@@ -160,6 +176,7 @@ export function parseSercopeCsvTextDetailed(
     }
   }
 
+  const parseMs = Date.now() - startMs
   return {
     rows,
     documentos,
@@ -170,6 +187,8 @@ export function parseSercopeCsvTextDetailed(
       valid: rows.length,
       invalid: invalidLines.length,
       duplicates: duplicateRows.length,
+      parseMs,
+      rowsPerSec: lines.length > 0 ? Math.round((lines.length / Math.max(1, parseMs)) * 1000) : 0,
     },
   }
 }
@@ -197,7 +216,18 @@ export async function parseCuilTxtDetailed(
   return parseCuilTextDetailed(text, options)
 }
 
-export async function parseSercopeCsvDetailed(file: File): Promise<ParseSercopeCsvResult> {
-  const text = await readFileAsText(file)
-  return parseSercopeCsvTextDetailed(text)
+export async function parseSercopeCsvDetailed(
+  file: File,
+  options: ParseSercopeCsvOptions = {},
+): Promise<ParseSercopeCsvResult> {
+  if (typeof Worker === 'undefined') {
+    options.onProgress?.({ percent: 0, rows: 0 })
+    const text = await readFileAsText(file)
+    const result = parseSercopeCsvTextDetailed(text)
+    options.onProgress?.({ percent: 100, rows: result.report.totalLines })
+    return result
+  }
+
+  const { parseSercopeCsvInWorker } = await import('./workerClient')
+  return parseSercopeCsvInWorker(file, options)
 }

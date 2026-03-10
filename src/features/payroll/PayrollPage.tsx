@@ -69,6 +69,7 @@ export function PayrollPage() {
     dispatch,
     consult,
     lastUploadReport,
+    fetchProgress,
   } = usePayroll()
 
   const [pdfOpen, setPdfOpen] = useState(false)
@@ -121,6 +122,10 @@ export function PayrollPage() {
   const periodPdfs = useMemo(
     () => (filteredData ? buildPeriodPdfs(filteredData, chequesByKey) : []),
     [filteredData, chequesByKey],
+  )
+  const chequesErrorCount = useMemo(
+    () => Object.values(chequesByKey).filter((bundle) => bundle.errors && bundle.errors.length > 0).length,
+    [chequesByKey],
   )
   const pdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
   const preview = pdfs[previewIndex] ?? null
@@ -399,10 +404,25 @@ export function PayrollPage() {
                   {loading ? 'Consultando' : 'Consultar'}
                 </Button>
                 <div className="text-sm text-gray-700">
-                  <span className="font-medium">{effectiveDocCount}</span> documentos {' '}
+                  <span className="font-medium">{effectiveDocCount}</span> documentos{' '}
                   <span className="font-medium">{effectivePeriodCount}</span> período(s)
                 </div>
               </div>
+              {loading && fetchProgress ? (
+                <p className="text-xs text-gray-600">
+                  {fetchProgress.label}{' '}
+                  {fetchProgress.total > 0
+                    ? `${fetchProgress.current}/${fetchProgress.total} · ${Math.round(
+                        (fetchProgress.current / fetchProgress.total) * 100,
+                      )}%`
+                    : null}
+                </p>
+              ) : null}
+              {!loading && chequesErrorCount > 0 ? (
+                <p className="text-xs text-amber-700">
+                  Cheques: {chequesErrorCount} consulta(s) con error. Reintentá Consultar.
+                </p>
+              ) : null}
 
               {lastUploadReport ? (
                 <p className="text-xs text-gray-600">

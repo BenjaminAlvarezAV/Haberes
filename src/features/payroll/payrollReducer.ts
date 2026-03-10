@@ -27,6 +27,7 @@ export interface PayrollState {
   data: NormalizedPayroll | null
   chequesByKey: Record<string, ChequesBundle>
   lastUploadReport: ParseCuilReport | null
+  fetchProgress: { label: string; current: number; total: number } | null
 }
 
 export type PayrollAction =
@@ -39,6 +40,7 @@ export type PayrollAction =
   | { type: 'SET_MANUAL_RANGE'; payload: { from: string; to: string } }
   | { type: 'SET_GROUP_MODE'; payload: GroupMode }
   | { type: 'FETCH_START' }
+  | { type: 'SET_FETCH_PROGRESS'; payload: { label: string; current: number; total: number } }
   | { type: 'FETCH_SUCCESS'; payload: NormalizedPayroll }
   | { type: 'SET_CHEQUES_MAP'; payload: Record<string, ChequesBundle> }
   | { type: 'FETCH_ERROR'; payload: AppError }
@@ -59,6 +61,7 @@ export const initialPayrollState: PayrollState = {
   data: null,
   chequesByKey: {},
   lastUploadReport: null,
+  fetchProgress: null,
 }
 
 function assertNever(x: never): never {
@@ -106,13 +109,15 @@ export function payrollReducer(state: PayrollState, action: PayrollAction): Payr
     case 'SET_GROUP_MODE':
       return { ...state, groupMode: action.payload }
     case 'FETCH_START':
-      return { ...state, loading: true, error: null }
+      return { ...state, loading: true, error: null, fetchProgress: null, chequesByKey: {} }
+    case 'SET_FETCH_PROGRESS':
+      return { ...state, fetchProgress: action.payload }
     case 'FETCH_SUCCESS':
-      return { ...state, loading: false, data: action.payload }
+      return { ...state, loading: false, data: action.payload, fetchProgress: null }
     case 'SET_CHEQUES_MAP':
-      return { ...state, chequesByKey: action.payload }
+      return { ...state, chequesByKey: { ...state.chequesByKey, ...action.payload } }
     case 'FETCH_ERROR':
-      return { ...state, loading: false, error: action.payload }
+      return { ...state, loading: false, error: action.payload, fetchProgress: null }
     case 'CLEAR_ERROR':
       return { ...state, error: null }
     default: {

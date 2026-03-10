@@ -1,4 +1,4 @@
-﻿import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   parseSercopeCsvDetailed,
   type ParseCuilReport,
@@ -21,6 +21,7 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<ParseCuilReport | null>(null)
+  const [parseProgress, setParseProgress] = useState<{ percent: number; rows: number } | null>(null)
 
   const [lastRows, setLastRows] = useState<ParseSercopeRow[] | null>(null)
 
@@ -41,7 +42,10 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
       }
 
       try {
-        const detailed = await parseSercopeCsvDetailed(file)
+        setParseProgress({ percent: 0, rows: 0 })
+        const detailed = await parseSercopeCsvDetailed(file, {
+          onProgress: (progress) => setParseProgress(progress),
+        })
         setReport(detailed.report)
         setLastRows(detailed.rows)
 
@@ -59,8 +63,10 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
 
         setError(null)
         onParsed({ documentos: detailed.documentos, rows: detailed.rows, periodos, report: detailed.report })
+        setParseProgress(null)
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Error al leer el archivo')
+        setParseProgress(null)
       }
     },
     [onParsed],
@@ -129,7 +135,7 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
       </div>
 
       {report ? (
-        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
           <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
             <div className="text-xs text-gray-600">Líneas</div>
             <div className="font-semibold text-gray-900">{report.totalLines}</div>
@@ -146,12 +152,33 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
             <div className="text-xs text-gray-600">Duplicados</div>
             <div className="font-semibold text-gray-900">{report.duplicates}</div>
           </div>
+          {typeof report.parseMs === 'number' ? (
+            <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
+              <div className="text-xs text-gray-600">Tiempo</div>
+              <div className="font-semibold text-gray-900">{(report.parseMs / 1000).toFixed(2)}s</div>
+            </div>
+          ) : null}
+          {typeof report.rowsPerSec === 'number' ? (
+            <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
+              <div className="text-xs text-gray-600">Filas/seg</div>
+              <div className="font-semibold text-gray-900">
+                {report.rowsPerSec.toLocaleString('es-AR')}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
       {derivedPeriods.length > 0 ? (
         <p className="text-xs text-gray-600">
           Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
+        </p>
+      ) : null}
+
+      {parseProgress ? (
+        <p className="text-xs text-gray-600">
+          Procesando CSV: <span className="font-medium">{parseProgress.percent}%</span> ·{' '}
+          {parseProgress.rows.toLocaleString('es-AR')} filas
         </p>
       ) : null}
 
