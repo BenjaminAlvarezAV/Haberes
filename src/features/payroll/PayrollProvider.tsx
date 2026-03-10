@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useReducer } from 'react'
 import type { ReactNode } from 'react'
-import { fetchPayroll } from '../../services/payrollService'
 import { fetchChequesForPairs } from '../../services/chequesService'
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
 import { currentPeriod, expandPeriodRange, isFuturePeriod } from '../../utils/period'
 import { normalizeCuil } from '../../utils/cuil'
+import type { NormalizedPayroll, PayrollItem } from '../../types/payroll'
+import type { AppError } from '../../types/errors'
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
@@ -70,7 +71,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           })()
 
     if ('error' in effective) {
-      dispatch({ type: 'FETCH_ERROR', payload: effective.error })
+      dispatch({ type: 'FETCH_ERROR', payload: effective.error as AppError })
       return
     }
 
@@ -93,35 +94,31 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
     dispatch({ type: 'FETCH_START' })
     try {
-      dispatch({ type: 'SET_FETCH_PROGRESS', payload: { label: 'Consultando haberes…', current: 0, total: 1 } })
-      // 1) Consultamos haberes (base) para la UI.
-      const normalized = await fetchPayroll(effective.cuils, effective.periodos)
-      dispatch({ type: 'SET_FETCH_PROGRESS', payload: { label: 'Consultando haberes…', current: 1, total: 1 } })
-
-      // 2) Consultamos todos los endpoints de cheques para completar el PDF.
-      // Se hace en cada consulta (requerimiento).
+      // 1) A partir de los CUILs y períodos efectivos armamos todos los pares (doc + período YYYYMM)
       const pairKeys = new Set<string>()
-      const pairs = normalized.items
-        .map((it) => ({ id: it.cuil, periodoYYYYMM: it.periodo.replace('-', '') }))
-        .filter((pair) => {
-          const key = `${pair.id}-${pair.periodoYYYYMM}`
-          if (pairKeys.has(key)) return false
-          pairKeys.add(key)
-          return true
-        })
-        .filter((pair) => {
-          const existing = state.chequesByKey[`${pair.id}-${pair.periodoYYYYMM}`]
-          return !existing || (existing.errors && existing.errors.length > 0)
-        })
+      const pairs = effective.cuils
+        .flatMap((id) =>
+          effective.periodos.map((p) => {
+            const periodoYYYYMM = p.replace('-', '')
+            const key = `${id}-${periodoYYYYMM}`
+            if (pairKeys.has(key)) return null
+            pairKeys.add(key)
+            return { id, periodoYYYYMM }
+          }),
+        )
+        .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
+
       dispatch({
         type: 'SET_FETCH_PROGRESS',
-        payload: { label: 'Consultando cheques…', current: 0, total: pairs.length },
+        payload: { label: 'Consultando cheques…', current: 0, total: pairs.length || 1 },
       })
+
+      // 2) Consultamos los 3 endpoints de cheques para cada par.
       const chequesMap =
         pairs.length > 0
           ? await fetchChequesForPairs(pairs, {
               concurrency: 6,
-              onProgress: (current, total) => {
+              onProgress: (current: number, total: number) => {
                 dispatch({
                   type: 'SET_FETCH_PROGRESS',
                   payload: { label: 'Consultando cheques…', current, total },
@@ -130,7 +127,61 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
             })
           : {}
 
-      dispatch({ type: 'FETCH_SUCCESS', payload: normalized })
+      // 3) Construimos la "nómina" a partir de cheques,
+      //    respetando los importes y descripciones que vienen de los endpoints.
+      const items: PayrollItem[] = []
+      const errors: { cuil: string; message: string }[] = []
+
+      Object.values(chequesMap).forEach((bundle) => {
+        const periodo = `${bundle.periodoYYYYMM.slice(0, 4)}-${bundle.periodoYYYYMM.slice(4, 6)}`
+
+        // a) Detalle por secuencia: un item por código (usa "pesos" y "descripcionCodigo").
+        bundle.liquidacionPorSecuencia.forEach((row) => {
+          if (row.pesos === null || Number.isNaN(row.pesos)) {
+            errors.push({
+              cuil: bundle.id,
+              message: `Importe inválido para código ${row.codigo ?? ''} en período ${periodo}`,
+            })
+            return
+          }
+
+          items.push({
+            cuil: bundle.id,
+            periodo,
+            concepto: row.descripcionCodigo ?? 'Sin concepto',
+            importe: row.pesos,
+          })
+        })
+
+        // b) Línea de resumen por establecimiento (suma de "liquido" por establecimiento).
+        const totalLiquido = bundle.liquidPorEstablecimiento.reduce(
+          (acc, row) => acc + (row.liquido ?? 0),
+          0,
+        )
+        if (!Number.isNaN(totalLiquido)) {
+          items.push({
+            cuil: bundle.id,
+            periodo,
+            concepto: 'Total líquido por establecimiento',
+            importe: totalLiquido,
+          })
+        }
+
+      if (bundle.errors && bundle.errors.length > 0) {
+        bundle.errors.forEach((msg) => {
+          errors.push({ cuil: bundle.id, message: msg })
+        })
+      }
+      })
+
+      const uniqueCuils = Array.from(new Set(items.map((i) => i.cuil))).sort()
+      const normalizedFromCheques: NormalizedPayroll = {
+        items,
+        agents: uniqueCuils.map((cuil) => ({ cuil })),
+        ...(errors.length > 0 ? { errors } : {}),
+      }
+
+      dispatch({ type: 'FETCH_SUCCESS', payload: normalizedFromCheques })
       if (Object.keys(chequesMap).length > 0) {
         dispatch({ type: 'SET_CHEQUES_MAP', payload: chequesMap })
       }
