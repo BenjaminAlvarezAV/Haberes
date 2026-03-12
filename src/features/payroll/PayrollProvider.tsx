@@ -13,11 +13,11 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
 
   const consult = useCallback(async () => {
-    // CSV obligatorio (en ambos modos).
-    if (state.cuils.length === 0) {
+    // CSV obligatorio solo para modo "lote".
+    if (state.queryMode === 'batch' && state.cuils.length === 0) {
       dispatch({
         type: 'FETCH_ERROR',
-        payload: validationError('Cargá un CSV con al menos una fila válida'),
+        payload: validationError('Cargá un CSV con al menos una fila válida para usar el modo Lote (CSV)'),
       })
       return
     }
@@ -44,30 +44,24 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               return { error: validationError('Ingresá un CUIL/DNI válido (11 o 8 dígitos, sin guiones)') }
             }
 
-            const setAvailable = new Set(state.availablePeriodos)
-            if (state.availablePeriodos.length === 0) {
-              return { error: validationError('No hay períodos disponibles derivados del CSV') }
-            }
-
-            // Período (mes) es obligatorio siempre.
-            if (!state.manualMonth) {
-              return { error: validationError('Seleccioná un período (mes)') }
-            }
-            if (!setAvailable.has(state.manualMonth)) {
-              return { error: validationError('El período seleccionado no está disponible según el CSV') }
-            }
-
-            // Rango opcional: si está completo, usamos rango; si no, usamos el mes.
-            if (state.manualFrom && state.manualTo) {
-              const desired = expandPeriodRange(state.manualFrom, state.manualTo)
-              const periodos = desired.filter((p) => setAvailable.has(p))
-              if (periodos.length === 0) {
-                return { error: validationError('El rango no tiene períodos disponibles según el CSV') }
+            // En modo manual NO dependemos del CSV ni de "availablePeriodos".
+            // Usamos siempre el rango completo DESDE-HASTA.
+            if (!state.manualFrom || !state.manualTo) {
+              return {
+                error: validationError('Completá el rango DESDE y HASTA (fechas) para consultar en modo Manual.'),
               }
-              return { cuils: [id], periodos }
             }
 
-            return { cuils: [id], periodos: [state.manualMonth] }
+            const desired = expandPeriodRange(state.manualFrom, state.manualTo)
+            if (desired.length === 0) {
+              return {
+                error: validationError(
+                  'El rango ingresado es inválido. Verificá las fechas y asegurate de que DESDE ≤ HASTA.',
+                ),
+              }
+            }
+
+            return { cuils: [id], periodos: desired }
           })()
 
     if ('error' in effective) {
@@ -130,20 +124,40 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       // 3) Construimos la "nómina" a partir de cheques,
       //    respetando los importes y descripciones que vienen de los endpoints.
       const items: PayrollItem[] = []
-      const errors: { cuil: string; message: string }[] = []
+      const rawErrors: { cuil: string; message: string; periodo: string }[] = []
+
+      // Para detectar si un documento falló en TODOS los períodos consultados.
+      const totalPeriodsByCuil = new Map<string, Set<string>>()
+      const errorPeriodsByCuil = new Map<string, Set<string>>()
+
+      const registerError = (cuil: string, periodo: string, message: string) => {
+        rawErrors.push({ cuil, message, periodo })
+        const set = errorPeriodsByCuil.get(cuil) ?? new Set<string>()
+        set.add(periodo)
+        errorPeriodsByCuil.set(cuil, set)
+      }
 
       Object.values(chequesMap).forEach((bundle) => {
         const periodo = `${bundle.periodoYYYYMM.slice(0, 4)}-${bundle.periodoYYYYMM.slice(4, 6)}`
 
+        // Registrar período consultado para este documento.
+        const totalSet = totalPeriodsByCuil.get(bundle.id) ?? new Set<string>()
+        totalSet.add(periodo)
+        totalPeriodsByCuil.set(bundle.id, totalSet)
+
         // a) Detalle por secuencia: un item por código (usa "pesos" y "descripcionCodigo").
+        let hasNonZeroDetail = false
         bundle.liquidacionPorSecuencia.forEach((row) => {
           if (row.pesos === null || Number.isNaN(row.pesos)) {
-            errors.push({
-              cuil: bundle.id,
-              message: `Importe inválido para código ${row.codigo ?? ''} en período ${periodo}`,
-            })
+            registerError(
+              bundle.id,
+              periodo,
+              `Importe inválido para código ${row.codigo ?? ''} en período ${periodo}`,
+            )
             return
           }
+
+          if (row.pesos !== 0) hasNonZeroDetail = true
 
           items.push({
             cuil: bundle.id,
@@ -167,18 +181,56 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           })
         }
 
-      if (bundle.errors && bundle.errors.length > 0) {
-        bundle.errors.forEach((msg) => {
-          errors.push({ cuil: bundle.id, message: msg })
-        })
-      }
+        // c) Si el servicio devolvió todo en 0 (sin detalle ni líquido), registramos un mensaje claro.
+        if (!hasNonZeroDetail && totalLiquido === 0) {
+          registerError(
+            bundle.id,
+            periodo,
+            `No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.`,
+          )
+        }
+
+        if (bundle.errors && bundle.errors.length > 0) {
+          bundle.errors.forEach((msg) => {
+            registerError(bundle.id, periodo, msg)
+          })
+        }
+      })
+
+      // Identificamos documentos para los que TODOS los períodos consultados tuvieron algún error,
+      // y colapsamos sus errores en un único mensaje resumen.
+      const finalErrors: { cuil: string; message: string }[] = []
+      const groupedByCuil = new Map<string, { cuil: string; message: string; periodo: string }[]>()
+      rawErrors.forEach((e) => {
+        const arr = groupedByCuil.get(e.cuil) ?? []
+        arr.push(e)
+        groupedByCuil.set(e.cuil, arr)
+      })
+
+      groupedByCuil.forEach((errs, cuil) => {
+        const totalPeriods = totalPeriodsByCuil.get(cuil)
+        const errorPeriods = errorPeriodsByCuil.get(cuil)
+        const totalCount = totalPeriods?.size ?? 0
+        const errorCount = errorPeriods?.size ?? 0
+
+        if (totalCount > 0 && errorCount === totalCount) {
+          finalErrors.push({
+            cuil,
+            message:
+              'No se pudieron obtener pagos en ninguno de los períodos consultados para este documento. Verificá que los datos sean correctos o intentá más tarde.',
+          })
+        } else {
+          errs.forEach((e) => {
+            finalErrors.push({ cuil: e.cuil, message: e.message })
+          })
+        }
       })
 
       const uniqueCuils = Array.from(new Set(items.map((i) => i.cuil))).sort()
       const normalizedFromCheques: NormalizedPayroll = {
         items,
         agents: uniqueCuils.map((cuil) => ({ cuil })),
-        ...(errors.length > 0 ? { errors } : {}),
+        ...(finalErrors.length > 0 ? { errors: finalErrors } : {}),
       }
 
       dispatch({ type: 'FETCH_SUCCESS', payload: normalizedFromCheques })

@@ -162,7 +162,7 @@ function splitHaberes(items: PayrollItem[]): { haberes: PayrollItem[]; descuento
 }
 
 function cell(text: string, style?: string, extra?: Partial<TableCell>): TableCell {
-  return { text, style, ...(extra ?? {}) }
+  return { text, style, ...(extra ?? {}) } as unknown as TableCell
 }
 
 const boxedLayout = {

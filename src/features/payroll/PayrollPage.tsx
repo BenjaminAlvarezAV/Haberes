@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { Card } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { DatePicker } from '../../components/ui/DatePicker'
 import { CuilUploader, type SercopeUploadPayload } from '../../components/upload/CuilUploader'
 import { PeriodSelector } from '../../components/filters/PeriodSelector'
 import { GroupToggle } from '../../components/results/GroupToggle'
@@ -14,7 +15,7 @@ import type { AgentPdf, PeriodPdf } from '../../pdf/builders'
 import { createPdfBase64, downloadBlob } from '../../pdf/render'
 import { groupByAgent, groupByPeriod } from '../../utils/grouping'
 import type { GroupedByAgent, GroupedByPeriod } from '../../utils/grouping'
-import { expandPeriodRange } from '../../utils/period'
+import { currentPeriod, expandPeriodRange } from '../../utils/period'
 
 type PdfEntry = AgentPdf | PeriodPdf
 
@@ -51,6 +52,33 @@ async function createPdfBase64WithTimeout(doc: PdfEntry['doc'], ms: number): Pro
   })
 }
 
+function shiftMonthYear(value: string, yearsDelta: number): string {
+  const safe = value && /^\d{4}-\d{2}$/.test(value) ? value : currentPeriod()
+  const year = Number(safe.slice(0, 4)) + yearsDelta
+  const month = safe.slice(5, 7)
+  return `${year}-${month}`
+}
+
+function periodToInputDate(period: string): string {
+  if (!/^\d{4}-\d{2}$/.test(period)) return ''
+  return `${period}-01`
+}
+
+function inputDateToPeriod(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return ''
+  return value.slice(0, 7)
+}
+
+function shiftSearchDateYear(value: string, yearsDelta: number): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  const [y, m, d] = value.split('-').map((v) => Number(v))
+  const date = new Date(y + yearsDelta, m - 1, d)
+  const yy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
 export function PayrollPage() {
   const {
     cuils,
@@ -70,6 +98,8 @@ export function PayrollPage() {
     consult,
     lastUploadReport,
     fetchProgress,
+    csvSources,
+    dataStale,
   } = usePayroll()
 
   const [pdfOpen, setPdfOpen] = useState(false)
@@ -84,6 +114,7 @@ export function PayrollPage() {
     null,
   )
   const [zipSkipped, setZipSkipped] = useState<string[]>([])
+  const [showErrorDetails, setShowErrorDetails] = useState(false)
 
   const normalizedAgentSearch = useMemo(() => agentSearch.trim().toLowerCase(), [agentSearch])
   const normalizedPeriodSearch = useMemo(() => {
@@ -98,7 +129,7 @@ export function PayrollPage() {
 
     let items = data.items
     if (normalizedAgentSearch) {
-      items = items.filter((it) => it.cuil.toLowerCase().includes(normalizedAgentSearch))
+      items = items.filter((it) => it.cuil.toLowerCase().startsWith(normalizedAgentSearch))
     }
     if (normalizedPeriodSearch) {
       items = items.filter((it) => it.periodo.toLowerCase().includes(normalizedPeriodSearch))
@@ -140,10 +171,15 @@ export function PayrollPage() {
 
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
-      // Guardamos documentos en el estado (reutilizamos cuils como identificador)
-      dispatch({ type: 'SET_CUILS', payload: { cuils: payload.documentos, report: payload.report } })
-      // Derivamos períodos del CSV y los seteamos como "disponibles" + seleccionados por defecto.
-      dispatch({ type: 'SET_AVAILABLE_PERIODOS', payload: payload.periodos })
+      dispatch({
+        type: 'ADD_CSV_SOURCE',
+        payload: {
+          name: payload.fileName,
+          documentos: payload.documentos,
+          periodos: payload.periodos,
+          report: payload.report,
+        },
+      })
     },
     [dispatch],
   )
@@ -154,16 +190,12 @@ export function PayrollPage() {
   }, [manualCuil])
 
   const manualPeriodos = useMemo(() => {
-    if (availablePeriodos.length === 0) return []
-    const setAvailable = new Set(availablePeriodos)
-    // Mes siempre visible (obligatorio); rango opcional.
+    // En modo manual derivamos siempre del rango DESDE-HASTA.
     if (manualFrom && manualTo) {
-      const desired = expandPeriodRange(manualFrom, manualTo)
-      return desired.filter((p) => setAvailable.has(p))
+      return expandPeriodRange(manualFrom, manualTo)
     }
-    if (!manualMonth) return []
-    return setAvailable.has(manualMonth) ? [manualMonth] : []
-  }, [manualFrom, manualTo, manualMonth, availablePeriodos])
+    return []
+  }, [manualFrom, manualTo])
 
   const effectiveDocCount = queryMode === 'manual' ? (manualIdValid ? 1 : 0) : cuils.length
   const effectivePeriodCount = queryMode === 'manual' ? manualPeriodos.length : periodos.length
@@ -259,18 +291,30 @@ export function PayrollPage() {
   }, [filteredData, groupMode, chequesByKey])
 
   return (
-    <div className="min-h-screen bg-gray-100 px-4 py-8">
+    <div className="min-h-screen bg-gray-100 px-4 py-8 text-gray-900">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header className="space-y-1">
-          <h1 className="text-2xl font-semibold text-gray-900">Sistema de Consulta de Haberes Docentes</h1>
-          <p className="text-sm text-gray-600">
-            Cargá un CSV (Sercope), revisá períodos (sin futuros) y consultá liquidaciones para generar PDFs.
-          </p>
+        <header className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-semibold">
+              Sistema de Consulta de Haberes Docentes
+            </h1>
+            <p className="text-sm text-gray-600">
+              Podés consultar por lote cargando un CSV (Sercope) o de forma manual por CUIL/DNI y período.
+            </p>
+          </div>
         </header>
 
         <Card title="Entrada de datos">
           <div className="grid gap-6 lg:grid-cols-2">
-            <CuilUploader onParsed={onCsvParsed} />
+            <CuilUploader
+              onParsed={onCsvParsed}
+              sources={csvSources.map((s) => ({
+                name: s.name,
+                documentos: s.documentos.length,
+                periodos: s.periodos.length,
+              }))}
+              onRemoveSource={(index) => dispatch({ type: 'REMOVE_CSV_SOURCE', payload: { index } })}
+            />
 
             <div className="space-y-4">
               <div className="space-y-3">
@@ -278,7 +322,7 @@ export function PayrollPage() {
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900">Modo de carga</h4>
                     <p className="text-xs text-gray-600">
-                      Elegí cómo querés consultar y generar los PDFs (CSV obligatorio).
+                      Elegí cómo querés consultar y generar los PDFs.
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -286,7 +330,6 @@ export function PayrollPage() {
                       type="button"
                       variant={queryMode === 'batch' ? 'primary' : 'secondary'}
                       onClick={() => dispatch({ type: 'SET_QUERY_MODE', payload: 'batch' })}
-                      disabled={cuils.length === 0}
                     >
                       Lote (CSV)
                     </Button>
@@ -294,7 +337,6 @@ export function PayrollPage() {
                       type="button"
                       variant={queryMode === 'manual' ? 'primary' : 'secondary'}
                       onClick={() => dispatch({ type: 'SET_QUERY_MODE', payload: 'manual' })}
-                      disabled={cuils.length === 0}
                     >
                       Manual (CUIL + rango)
                     </Button>
@@ -307,7 +349,7 @@ export function PayrollPage() {
                     available={availablePeriodos}
                     onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
                   />
-                ) : (
+              ) : (
                   <div className="space-y-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-900">
@@ -338,62 +380,48 @@ export function PayrollPage() {
                     </div>
 
                     <div className="space-y-2">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-900">Período (mes)</label>
-                        <div className="mt-1">
-                          <Input
-                            type="month"
-                            value={manualMonth}
-                            onChange={(e) =>
-                              dispatch({ type: 'SET_MANUAL_MONTH', payload: e.target.value })
-                            }
-                          />
-                        </div>
-                        <p className="mt-1 text-xs text-gray-600">Obligatorio.</p>
-                      </div>
-
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div>
                           <label className="block text-sm font-medium text-gray-900">
-                            Rango desde (opcional)
+                            Rango desde (mm/aaaa)
                           </label>
                           <div className="mt-1">
-                            <Input
-                              type="month"
-                              value={manualFrom}
-                              onChange={(e) =>
+                            <DatePicker
+                              value={periodToInputDate(manualFrom)}
+                              onChange={(next) => {
+                                const period = inputDateToPeriod(next)
                                 dispatch({
                                   type: 'SET_MANUAL_RANGE',
-                                  payload: { from: e.target.value, to: manualTo },
+                                  payload: { from: period, to: manualTo },
                                 })
-                              }
+                              }}
+                              max={`${currentPeriod()}-31`}
                             />
                           </div>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-gray-900">
-                            Rango hasta (opcional)
+                            Rango hasta (mm/aaaa)
                           </label>
                           <div className="mt-1">
-                            <Input
-                              type="month"
-                              value={manualTo}
-                              onChange={(e) =>
+                            <DatePicker
+                              value={periodToInputDate(manualTo)}
+                              onChange={(next) => {
+                                const period = inputDateToPeriod(next)
                                 dispatch({
                                   type: 'SET_MANUAL_RANGE',
-                                  payload: { from: manualFrom, to: e.target.value },
+                                  payload: { from: manualFrom, to: period },
                                 })
-                              }
+                              }}
+                              max={`${currentPeriod()}-31`}
                             />
                           </div>
                         </div>
                       </div>
-                      <p className="text-xs text-gray-600">
-                        Si completás DESDE y HASTA, se usa el rango; si no, se usa el mes.
-                      </p>
+                      <p className="text-xs text-gray-600">Ambas fechas son obligatorias en modo Manual.</p>
                     </div>
                     <p className="text-xs text-gray-600">
-                      Períodos seleccionados (según CSV): <span className="font-medium">{manualPeriodos.length}</span>
+                      Períodos seleccionados: <span className="font-medium">{manualPeriodos.length}</span>
                     </p>
                   </div>
                 )}
@@ -416,6 +444,13 @@ export function PayrollPage() {
                         (fetchProgress.current / fetchProgress.total) * 100,
                       )}%`
                     : null}
+                </p>
+              ) : null}
+              {!loading && data && dataStale ? (
+                <p className="text-xs text-amber-700">
+                  Se cargaron o modificaron CSV después de esta consulta. Los resultados de abajo
+                  corresponden a la consulta anterior; presioná &quot;Consultar&quot; para
+                  actualizarlos.
                 </p>
               ) : null}
               {!loading && chequesErrorCount > 0 ? (
@@ -456,21 +491,18 @@ export function PayrollPage() {
                   }}
                   placeholder="Buscar por documento/agente…"
                 />
-                <Input
-                  type="date"
+                <DatePicker
                   value={periodSearchDate}
-                  onChange={(event) => {
-                    setPeriodSearchDate(event.target.value)
-                  }}
+                  onChange={(next) => setPeriodSearchDate(next)}
                   aria-label="Buscar por período (seleccionando una fecha)"
-                  className="tabular-nums"
+                  className="w-full"
                 />
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="secondary"
                   onClick={clearFilters}
                   disabled={!agentSearch.trim() && !periodSearchDate.trim()}
-                  className="h-8 self-end px-2 text-[11px] leading-none ring-1 ring-gray-200"
+                  className="h-8 self-end px-2 text-[11px] leading-none"
                 >
                   Limpiar filtros
                 </Button>
@@ -500,8 +532,80 @@ export function PayrollPage() {
               </div>
 
               {data.errors && data.errors.length > 0 ? (
-                <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200">
-                  Se detectaron {data.errors.length} observaciones al normalizar la respuesta.
+                <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <p>
+                      Se detectaron {data.errors.length} observaciones al normalizar la respuesta.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-7 px-2 text-[11px] leading-none"
+                      onClick={() => setShowErrorDetails((v) => !v)}
+                    >
+                      {showErrorDetails ? 'Ocultar detalles' : 'Ver detalles'}
+                    </Button>
+                  </div>
+                  {showErrorDetails ? (
+                    (() => {
+                      const genericMessages = new Set<string>([
+                        'No se pudieron obtener pagos en ninguno de los períodos consultados para este documento. Verificá que los datos sean correctos o intentá más tarde.',
+                        'No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.',
+                      ])
+                      const onlyGeneric =
+                        data.errors?.length &&
+                        data.errors.every((e) => genericMessages.has(e.message))
+
+                      return (
+                        <div className="space-y-2 text-xs">
+                          <div>
+                            <p className="font-semibold">Documentos con observaciones</p>
+                            <ul className="mt-1 list-disc pl-5">
+                              {Array.from(
+                                new Map(
+                                  data.errors.map((e) => [
+                                    e.cuil,
+                                    {
+                                      cuil: e.cuil,
+                                      messages: data.errors
+                                        .filter((x) => x.cuil === e.cuil)
+                                        .map((x) => x.message),
+                                    },
+                                  ]),
+                                ).values(),
+                              ).map((entry) => (
+                                <li key={entry.cuil}>
+                                  <span className="font-mono">{entry.cuil}</span>
+                                  {entry.messages.length > 0 ? (
+                                    <span className="text-gray-700">
+                                      {' '}
+                                      – {entry.messages[0]}
+                                      {entry.messages.length > 1
+                                        ? ` (+${entry.messages.length - 1} más)`
+                                        : ''}
+                                    </span>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                          {!onlyGeneric ? (
+                            <div>
+                              <p className="font-semibold">Detalle completo</p>
+                              <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto pr-1">
+                                {data.errors.map((e, idx) => (
+                                  <li key={`${e.cuil}-${idx}`}>
+                                    <span className="font-mono">{e.cuil}</span>{' '}
+                                    <span className="text-gray-700">– {e.message}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </div>
+                      )
+                    })()
+                  ) : null}
                 </div>
               ) : null}
 

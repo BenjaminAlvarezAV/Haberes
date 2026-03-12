@@ -7,6 +7,7 @@ import {
 import { expandYYYYMMRange } from '../../utils/period'
 
 export interface SercopeUploadPayload {
+  fileName: string
   documentos: string[]
   rows: ParseSercopeRow[]
   periodos: string[]
@@ -15,9 +16,11 @@ export interface SercopeUploadPayload {
 
 export interface CuilUploaderProps {
   onParsed: (payload: SercopeUploadPayload) => void
+  sources?: { name: string; documentos: number; periodos: number }[]
+  onRemoveSource?: (index: number) => void
 }
 
-export function CuilUploader({ onParsed }: CuilUploaderProps) {
+export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploaderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<ParseCuilReport | null>(null)
@@ -51,7 +54,7 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
 
         if (detailed.rows.length === 0) {
           setError('El archivo está vacío o no contiene filas válidas')
-          onParsed({ documentos: [], rows: [], periodos: [], report: detailed.report })
+          onParsed({ fileName: file.name, documentos: [], rows: [], periodos: [], report: detailed.report })
           return
         }
 
@@ -62,7 +65,13 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
         const periodos = Array.from(set).sort()
 
         setError(null)
-        onParsed({ documentos: detailed.documentos, rows: detailed.rows, periodos, report: detailed.report })
+        onParsed({
+          fileName: file.name,
+          documentos: detailed.documentos,
+          rows: detailed.rows,
+          periodos,
+          report: detailed.report,
+        })
         setParseProgress(null)
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Error al leer el archivo')
@@ -173,6 +182,37 @@ export function CuilUploader({ onParsed }: CuilUploaderProps) {
         <p className="text-xs text-gray-600">
           Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
         </p>
+      ) : null}
+
+      {sources && sources.length > 0 ? (
+        <div className="space-y-1 text-xs text-gray-700">
+          <p className="font-medium">CSV cargados en esta sesión:</p>
+          <ul className="space-y-0.5">
+            {sources.map((f, idx) => (
+              <li key={`${f.name}-${idx}`} className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="font-mono">{f.name}</span>{' '}
+                  <span className="text-gray-600">
+                    – {f.documentos} documento(s), {f.periodos} período(s)
+                  </span>
+                </div>
+                {onRemoveSource ? (
+                  <button
+                    type="button"
+                    className="rounded px-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-red-600"
+                    aria-label={`Quitar CSV ${f.name}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRemoveSource(idx)
+                    }}
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       {parseProgress ? (

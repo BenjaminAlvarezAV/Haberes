@@ -3,8 +3,7 @@ import type { AppError } from '../../types/errors'
 import type { ParseCuilReport } from '../../utils/txtParser'
 import type { GroupMode, NormalizedPayroll } from '../../types/payroll'
 import type { ChequesBundle } from '../../types/cheques'
-import type { PayrollAction } from './payrollReducer'
-import type { QueryMode } from './payrollReducer'
+import type { CsvSource, PayrollAction, QueryMode } from './payrollReducer'
 
 export interface PayrollStateShape {
   cuils: string[]
@@ -22,6 +21,8 @@ export interface PayrollStateShape {
   chequesByKey: Record<string, ChequesBundle>
   lastUploadReport: ParseCuilReport | null
   fetchProgress: { label: string; current: number; total: number } | null
+  csvSources: CsvSource[]
+  dataStale: boolean
 }
 
 export interface PayrollContextValue extends PayrollStateShape {

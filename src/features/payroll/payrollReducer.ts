@@ -5,6 +5,13 @@ import type { ParseCuilReport } from '../../utils/txtParser'
 
 export type QueryMode = 'batch' | 'manual'
 
+export interface CsvSource {
+  name: string
+  documentos: string[]
+  periodos: string[]
+  report: ParseCuilReport | null
+}
+
 export interface PayrollState {
   cuils: string[]
   /** Períodos derivados del CSV (fuente). */
@@ -28,6 +35,8 @@ export interface PayrollState {
   chequesByKey: Record<string, ChequesBundle>
   lastUploadReport: ParseCuilReport | null
   fetchProgress: { label: string; current: number; total: number } | null
+  csvSources: CsvSource[]
+  dataStale: boolean
 }
 
 export type PayrollAction =
@@ -45,6 +54,8 @@ export type PayrollAction =
   | { type: 'SET_CHEQUES_MAP'; payload: Record<string, ChequesBundle> }
   | { type: 'FETCH_ERROR'; payload: AppError }
   | { type: 'CLEAR_ERROR' }
+  | { type: 'ADD_CSV_SOURCE'; payload: CsvSource }
+  | { type: 'REMOVE_CSV_SOURCE'; payload: { index: number } }
 
 export const initialPayrollState: PayrollState = {
   cuils: [],
@@ -62,6 +73,26 @@ export const initialPayrollState: PayrollState = {
   chequesByKey: {},
   lastUploadReport: null,
   fetchProgress: null,
+  csvSources: [],
+  dataStale: false,
+}
+
+function recomputeFromSources(sources: CsvSource[]): {
+  cuils: string[]
+  availablePeriodos: string[]
+  periodos: string[]
+} {
+  const docs = new Set<string>()
+  const periods = new Set<string>()
+  sources.forEach((s) => {
+    s.documentos.forEach((d) => docs.add(d))
+    s.periodos.forEach((p) => periods.add(p))
+  })
+  const cuils = Array.from(docs).sort()
+  const availablePeriodos = Array.from(periods).sort()
+  // Por defecto, todos los períodos disponibles quedan seleccionados.
+  const periodos = [...availablePeriodos]
+  return { cuils, availablePeriodos, periodos }
 }
 
 function assertNever(x: never): never {
@@ -71,49 +102,80 @@ function assertNever(x: never): never {
 export function payrollReducer(state: PayrollState, action: PayrollAction): PayrollState {
   switch (action.type) {
     case 'SET_CUILS':
+      // Nuevo comportamiento: acumular documentos de varios CSVs en lugar de reemplazarlos.
+      // Usamos un Set para evitar duplicados.
+      const mergedCuils = Array.from(new Set([...state.cuils, ...action.payload.cuils]))
       return {
         ...state,
-        cuils: action.payload.cuils,
+        cuils: mergedCuils,
         lastUploadReport: action.payload.report,
-        availablePeriodos: [],
-        periodos: [],
-        queryMode: 'batch',
-        manualCuil: '',
-        manualMonth: '',
-        manualFrom: '',
-        manualTo: '',
-        data: null,
-        chequesByKey: {},
         error: null,
       }
     case 'SET_AVAILABLE_PERIODOS':
-      // Cuando cambia el archivo/fuente, por defecto seleccionamos todo el rango derivado.
+      // Nuevo comportamiento: fusionar períodos derivados de múltiples CSVs.
+      // availablePeriodos: fuente total; periodos: seleccionados (por defecto, todos).
+      const mergedAvailable = Array.from(
+        new Set([...state.availablePeriodos, ...action.payload]),
+      ).sort()
+      const mergedSelected = Array.from(new Set([...state.periodos, ...action.payload])).sort()
       return {
         ...state,
-        availablePeriodos: action.payload,
-        periodos: action.payload,
-        data: null,
-        chequesByKey: {},
+        availablePeriodos: mergedAvailable,
+        periodos: mergedSelected,
         error: null,
       }
+    case 'ADD_CSV_SOURCE': {
+      const csvSources = [...state.csvSources, action.payload]
+      const { cuils, availablePeriodos, periodos } = recomputeFromSources(csvSources)
+      return {
+        ...state,
+        csvSources,
+        cuils,
+        availablePeriodos,
+        periodos,
+        lastUploadReport: action.payload.report,
+        dataStale: state.data !== null,
+        error: null,
+      }
+    }
+    case 'REMOVE_CSV_SOURCE': {
+      const csvSources = state.csvSources.filter((_, idx) => idx !== action.payload.index)
+      const { cuils, availablePeriodos, periodos } = recomputeFromSources(csvSources)
+      return {
+        ...state,
+        csvSources,
+        cuils,
+        availablePeriodos,
+        periodos,
+        dataStale: state.data !== null,
+        error: null,
+      }
+    }
     case 'SET_PERIODOS':
-      return { ...state, periodos: action.payload, data: null }
+      return { ...state, periodos: action.payload, data: null, dataStale: false }
     case 'SET_QUERY_MODE':
-      return { ...state, queryMode: action.payload, data: null, error: null }
+      return { ...state, queryMode: action.payload, data: null, dataStale: false, error: null }
     case 'SET_MANUAL_CUIL':
-      return { ...state, manualCuil: action.payload, data: null, error: null }
+      return { ...state, manualCuil: action.payload, data: null, dataStale: false, error: null }
     case 'SET_MANUAL_MONTH':
-      return { ...state, manualMonth: action.payload, data: null, error: null }
+      return { ...state, manualMonth: action.payload, data: null, dataStale: false, error: null }
     case 'SET_MANUAL_RANGE':
-      return { ...state, manualFrom: action.payload.from, manualTo: action.payload.to, data: null, error: null }
+      return {
+        ...state,
+        manualFrom: action.payload.from,
+        manualTo: action.payload.to,
+        data: null,
+        dataStale: false,
+        error: null,
+      }
     case 'SET_GROUP_MODE':
       return { ...state, groupMode: action.payload }
     case 'FETCH_START':
-      return { ...state, loading: true, error: null, fetchProgress: null, chequesByKey: {} }
+      return { ...state, loading: true, error: null, fetchProgress: null, chequesByKey: {}, dataStale: false }
     case 'SET_FETCH_PROGRESS':
       return { ...state, fetchProgress: action.payload }
     case 'FETCH_SUCCESS':
-      return { ...state, loading: false, data: action.payload, fetchProgress: null }
+      return { ...state, loading: false, data: action.payload, fetchProgress: null, dataStale: false }
     case 'SET_CHEQUES_MAP':
       return { ...state, chequesByKey: { ...state.chequesByKey, ...action.payload } }
     case 'FETCH_ERROR':

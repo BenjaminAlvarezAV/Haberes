@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { currentPeriod, expandPeriodRange, isFuturePeriod, isValidPeriod } from '../../utils/period'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
+import { DatePicker } from '../ui/DatePicker'
 
 function arraysEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
@@ -38,6 +39,32 @@ function computeRangeSelection(params: {
   return { next, error: null }
 }
 
+function periodToInputDate(period: string): string {
+  // YYYY-MM -> YYYY-MM-01 (valor válido para <input type="date">)
+  if (!isValidPeriod(period)) return ''
+  return `${period}-01`
+}
+
+function inputDateToPeriod(value: string): string | null {
+  // YYYY-MM-DD -> YYYY-MM (ignoramos el día)
+  if (!value) return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const period = value.slice(0, 7)
+  if (!isValidPeriod(period)) return null
+  return period
+}
+
+function shiftInputYear(value: string, yearsDelta: number): string {
+  const safe = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : `${currentPeriod()}-01`
+  const [y, m, d] = safe.split('-').map((v) => Number(v))
+  const date = new Date(y, m - 1, d)
+  date.setFullYear(date.getFullYear() + yearsDelta)
+  const yy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
 export function PeriodSelector({
   value,
   available,
@@ -62,18 +89,27 @@ export function PeriodSelector({
   // Defaults amigables cuando llega un CSV nuevo.
   useEffect(() => {
     if (availableSorted.length === 0) return
-    setFrom((prev) => prev || availableSorted[0])
-    setTo((prev) => prev || availableSorted[availableSorted.length - 1])
+    setFrom((prev) => prev || periodToInputDate(availableSorted[0]))
+    setTo((prev) => prev || periodToInputDate(availableSorted[availableSorted.length - 1]))
   }, [availableSorted])
 
   // Aplicación automática del rango (sin necesidad de click).
   useEffect(() => {
     if (!useRangeFilter) return
-    if (!from || !to) return
-    if (!isValidPeriod(from) || !isValidPeriod(to)) return
+    if (!from || !to) {
+      setError(null)
+      return
+    }
+    const fromPeriod = inputDateToPeriod(from)
+    const toPeriod = inputDateToPeriod(to)
+    if (!fromPeriod || !toPeriod) {
+      setError('Formato de fecha inválido.')
+      onChange([])
+      return
+    }
 
     const handle = window.setTimeout(() => {
-      const computed = computeRangeSelection({ from, to, max, availableSorted })
+      const computed = computeRangeSelection({ from: fromPeriod, to: toPeriod, max, availableSorted })
       if (computed.error) {
         setError(computed.error)
         if (computed.next.length === 0 && value.length !== 0) onChange([])
@@ -87,7 +123,7 @@ export function PeriodSelector({
     }, 200)
 
     return () => window.clearTimeout(handle)
-  }, [from, to, availableSorted, max, onChange, value])
+  }, [from, to, availableSorted, max, onChange, useRangeFilter, value])
 
   // Si el usuario apaga el filtro por rango, seleccionamos automáticamente "todos los períodos del CSV".
   useEffect(() => {
@@ -120,14 +156,23 @@ export function PeriodSelector({
                 onChange(availableSorted)
               } else {
                 // Encendido: aplicamos el rango actual (o el default si está vacío).
-                const nextFrom = from || availableSorted[0]
-                const nextTo = to || availableSorted[availableSorted.length - 1]
-                setFrom(nextFrom)
-                setTo(nextTo)
+                const nextFromInput = from || periodToInputDate(availableSorted[0])
+                const nextToInput = to || periodToInputDate(availableSorted[availableSorted.length - 1])
+                setFrom(nextFromInput)
+                setTo(nextToInput)
+
+                const fromPeriod = inputDateToPeriod(nextFromInput)
+                const toPeriod = inputDateToPeriod(nextToInput)
+
+                if (!fromPeriod || !toPeriod) {
+                  setError('Formato de fecha inválido.')
+                  onChange([])
+                  return
+                }
 
                 const computed = computeRangeSelection({
-                  from: nextFrom,
-                  to: nextTo,
+                  from: fromPeriod,
+                  to: toPeriod,
                   max,
                   availableSorted,
                 })
@@ -142,65 +187,46 @@ export function PeriodSelector({
           />
           Filtrar por rango de períodos
         </label>
-
-        <Button
-          type="button"
-          onClick={() => {
-            setError(null)
-            setUseRangeFilter(false)
-            if (availableSorted.length > 0) onChange(availableSorted)
-          }}
-          variant="secondary"
-          className="h-10 whitespace-nowrap"
-          disabled={availableSorted.length === 0}
-        >
-          Ver todos
-        </Button>
       </div>
 
       {useRangeFilter ? (
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto] items-end">
           <div>
-            <label className="block text-sm font-medium text-gray-900">Desde (YYYY-MM)</label>
+            <label className="block text-sm font-medium text-gray-900">Desde (mm/aaaa)</label>
             <div className="mt-1">
-              <Input type="month" value={from} onChange={(e) => setFrom(e.target.value)} max={max} />
+              <DatePicker
+                value={from}
+                onChange={(next) => setFrom(next)}
+                max={periodToInputDate(max)}
+                placeholder="mm/aaaa"
+                className="w-full"
+              />
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-900">Hasta (YYYY-MM)</label>
+            <label className="block text-sm font-medium text-gray-900">Hasta (mm/aaaa)</label>
             <div className="mt-1">
-              <Input type="month" value={to} onChange={(e) => setTo(e.target.value)} max={max} />
+              <DatePicker
+                value={to}
+                onChange={(next) => setTo(next)}
+                max={periodToInputDate(max)}
+                placeholder="mm/aaaa"
+                className="w-full"
+              />
             </div>
           </div>
-          <Button
-            type="button"
-            onClick={() => {
-              setError(null)
-              if (availableSorted.length > 0) {
-                setFrom(availableSorted[0])
-                setTo(availableSorted[availableSorted.length - 1])
-              }
-              onChange(availableSorted)
-              setUseRangeFilter(false)
-            }}
-            variant="secondary"
-            className="h-10 whitespace-nowrap"
-            disabled={availableSorted.length === 0}
-          >
-            Todos
-          </Button>
         </div>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-gray-600">
           Disponibles en CSV: <span className="font-medium">{availableSorted.length}</span> — Seleccionados:{' '}
-          <span className="font-medium">{sorted.length}</span> (máximo {max})
+          <span className="font-medium">{sorted.length}</span>
         </p>
         <Button
           type="button"
-          variant="ghost"
-          className="h-8 px-2 text-xs ring-1 ring-gray-200"
+          variant="secondary"
+          className="h-8 px-2 text-xs"
           onClick={() => setShowPeriods((v) => !v)}
           disabled={sorted.length === 0}
         >

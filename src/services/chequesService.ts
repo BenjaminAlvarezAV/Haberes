@@ -26,31 +26,68 @@ function friendlyErrorLabel(e: unknown): string {
   return e instanceof Error ? e.message : 'Error'
 }
 
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function fetchWithRetries<T>(
+  task: () => Promise<T>,
+  label: string,
+  errors: string[],
+  attempts: number = 3,
+  baseDelayMs: number = 400,
+): Promise<T | null> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await task()
+    } catch (e) {
+      lastError = e
+      if (attempt < attempts) {
+        const delay = baseDelayMs * attempt
+        await sleep(delay)
+      }
+    }
+  }
+
+  errors.push(`${label}: ${friendlyErrorLabel(lastError)}`)
+  return null
+}
+
 export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Promise<ChequesBundle> {
   const errors: string[] = []
 
   const [estab, secu, msg] = await Promise.all([
-    chequesClient
-      .get<unknown>(`/wsstestsigue/cheques/liquidPorEstablecimiento/${id}/${periodoYYYYMM}`)
-      .then((r) => normalizeLiquidPorEstablecimiento(r.data))
-      .catch((e: unknown) => {
-        errors.push(`liquidPorEstablecimiento: ${friendlyErrorLabel(e)}`)
-        return []
-      }),
-    chequesClient
-      .get<unknown>(`/wsstestsigue/cheques/liquidacionPorSecuencia/${id}/${periodoYYYYMM}`)
-      .then((r) => normalizeLiquidacionPorSecuencia(r.data))
-      .catch((e: unknown) => {
-        errors.push(`liquidacionPorSecuencia: ${friendlyErrorLabel(e)}`)
-        return []
-      }),
-    chequesClient
-      .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
-      .then((r) => normalizeMensajeria(r.data))
-      .catch((e: unknown) => {
-        errors.push(`mensajeria: ${friendlyErrorLabel(e)}`)
-        return { mensajeGeneral: [], mensajesPersonalizados: [] }
-      }),
+    fetchWithRetries(
+      () =>
+        chequesClient
+          .get<unknown>(`/wsstestsigue/cheques/liquidPorEstablecimiento/${id}/${periodoYYYYMM}`)
+          .then((r) => normalizeLiquidPorEstablecimiento(r.data)),
+      'liquidPorEstablecimiento',
+      errors,
+    ).then((res) => res ?? []),
+    fetchWithRetries(
+      () =>
+        chequesClient
+          .get<unknown>(`/wsstestsigue/cheques/liquidacionPorSecuencia/${id}/${periodoYYYYMM}`)
+          .then((r) => normalizeLiquidacionPorSecuencia(r.data)),
+      'liquidacionPorSecuencia',
+      errors,
+    ).then((res) => res ?? []),
+    fetchWithRetries(
+      () =>
+        chequesClient
+          .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
+          .then((r) => normalizeMensajeria(r.data)),
+      'mensajeria',
+      errors,
+    ).then(
+      (res) =>
+        res ?? {
+          mensajeGeneral: [],
+          mensajesPersonalizados: [],
+        },
+    ),
   ])
 
   return {
@@ -69,7 +106,8 @@ export async function fetchChequesForPairs(
   pairs: Array<{ id: string; periodoYYYYMM: string }>,
   opts?: { concurrency?: number; onProgress?: (current: number, total: number) => void },
 ): Promise<ChequesBundleMap> {
-  const concurrency = opts?.concurrency ?? 6
+  // Aumentamos levemente la concurrencia por defecto para grandes volúmenes.
+  const concurrency = opts?.concurrency ?? 10
   const map: ChequesBundleMap = {}
   let completed = 0
   const total = pairs.length
