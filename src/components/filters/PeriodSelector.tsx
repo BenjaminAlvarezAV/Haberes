@@ -74,11 +74,12 @@ export function PeriodSelector({
   available: string[]
   onChange: (periodos: string[]) => void
 }) {
-  const [useRangeFilter, setUseRangeFilter] = useState(true)
+  const [useRangeFilter, setUseRangeFilter] = useState(false)
   const [showPeriods, setShowPeriods] = useState(false)
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [singlePeriod, setSinglePeriod] = useState<string>('') // YYYY-MM
 
   const sorted = useMemo(() => [...value].sort(), [value])
   const availableSorted = useMemo(() => [...available].sort(), [available])
@@ -86,55 +87,15 @@ export function PeriodSelector({
 
   const remove = (p: string) => onChange(value.filter((x) => x !== p))
 
-  // Defaults amigables cuando llega un CSV nuevo.
+  // Defaults amigables cuando llega un CSV nuevo (solo para rango, no modifican la selección).
   useEffect(() => {
     if (availableSorted.length === 0) return
+    // Para rango, inicializamos desde/hasta con el primer y último período disponible.
     setFrom((prev) => prev || periodToInputDate(availableSorted[0]))
     setTo((prev) => prev || periodToInputDate(availableSorted[availableSorted.length - 1]))
+    // Para período único, si aún no hay ninguno elegido, usamos el más reciente.
+    setSinglePeriod((prev) => (prev && isValidPeriod(prev) ? prev : availableSorted[availableSorted.length - 1]))
   }, [availableSorted])
-
-  // Aplicación automática del rango (sin necesidad de click).
-  useEffect(() => {
-    if (!useRangeFilter) return
-    if (!from || !to) {
-      setError(null)
-      return
-    }
-    const fromPeriod = inputDateToPeriod(from)
-    const toPeriod = inputDateToPeriod(to)
-    if (!fromPeriod || !toPeriod) {
-      setError('Formato de fecha inválido.')
-      onChange([])
-      return
-    }
-
-    const handle = window.setTimeout(() => {
-      const computed = computeRangeSelection({ from: fromPeriod, to: toPeriod, max, availableSorted })
-      if (computed.error) {
-        setError(computed.error)
-        if (computed.next.length === 0 && value.length !== 0) onChange([])
-        return
-      }
-
-      setError(null)
-      const sortedNext = [...computed.next].sort()
-      const sortedCurrent = [...value].sort()
-      if (!arraysEqual(sortedNext, sortedCurrent)) onChange(sortedNext)
-    }, 200)
-
-    return () => window.clearTimeout(handle)
-  }, [from, to, availableSorted, max, onChange, useRangeFilter, value])
-
-  // Si el usuario apaga el filtro por rango, seleccionamos automáticamente "todos los períodos del CSV".
-  useEffect(() => {
-    if (availableSorted.length === 0) return
-    if (useRangeFilter) return
-
-    setError(null)
-    const sortedCurrent = [...value].sort()
-    const sortedAll = [...availableSorted].sort()
-    if (!arraysEqual(sortedCurrent, sortedAll)) onChange(sortedAll)
-  }, [availableSorted, onChange, useRangeFilter, value])
 
   return (
     <div className="space-y-3">
@@ -152,36 +113,20 @@ export function PeriodSelector({
               if (!availableSorted.length) return
 
               if (!next) {
-                // Apagado: todos los períodos.
-                onChange(availableSorted)
+                // Apagado: modo "períodos individuales". Mantenemos la selección actual;
+                // el usuario podrá agregar períodos puntuales con el campo de abajo.
+                const base =
+                  singlePeriod && isValidPeriod(singlePeriod)
+                    ? singlePeriod
+                    : availableSorted[availableSorted.length - 1]
+                setSinglePeriod(base)
               } else {
-                // Encendido: aplicamos el rango actual (o el default si está vacío).
+                // Encendido: dejamos preparados los valores de rango actuales o defaults,
+                // pero la aplicación del rango se hace con el botón "Agregar períodos del rango".
                 const nextFromInput = from || periodToInputDate(availableSorted[0])
                 const nextToInput = to || periodToInputDate(availableSorted[availableSorted.length - 1])
                 setFrom(nextFromInput)
                 setTo(nextToInput)
-
-                const fromPeriod = inputDateToPeriod(nextFromInput)
-                const toPeriod = inputDateToPeriod(nextToInput)
-
-                if (!fromPeriod || !toPeriod) {
-                  setError('Formato de fecha inválido.')
-                  onChange([])
-                  return
-                }
-
-                const computed = computeRangeSelection({
-                  from: fromPeriod,
-                  to: toPeriod,
-                  max,
-                  availableSorted,
-                })
-                if (computed.error) {
-                  setError(computed.error)
-                  onChange([])
-                } else {
-                  onChange([...computed.next].sort())
-                }
               }
             }}
           />
@@ -215,23 +160,116 @@ export function PeriodSelector({
               />
             </div>
           </div>
+          <Button
+            type="button"
+            className="h-10 whitespace-nowrap text-xs"
+            variant="secondary"
+            onClick={() => {
+              const fromPeriod = inputDateToPeriod(from)
+              const toPeriod = inputDateToPeriod(to)
+              if (!fromPeriod || !toPeriod || !isValidPeriod(fromPeriod) || !isValidPeriod(toPeriod)) {
+                setError('Ingresá un rango válido en formato mm/aaaa.')
+                return
+              }
+              const computed = computeRangeSelection({ from: fromPeriod, to: toPeriod, max, availableSorted })
+              if (computed.error) {
+                setError(computed.error)
+                return
+              }
+              setError(null)
+              const nextSet = new Set([...value, ...computed.next])
+              const nextList = Array.from(nextSet).sort()
+              if (!arraysEqual(nextList, [...value].sort())) {
+                onChange(nextList)
+              }
+            }}
+          >
+            Agregar períodos del rango
+          </Button>
         </div>
-      ) : null}
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto] items-end">
+          <div>
+            <label className="block text-sm font-medium text-gray-900">Período único (mm/aaaa)</label>
+            <div className="mt-1">
+              <DatePicker
+                value={singlePeriod ? `${singlePeriod}-01` : ''}
+                onChange={(next) => {
+                  const period = inputDateToPeriod(next)
+                  if (!period || !isValidPeriod(period)) {
+                    setError('Formato de período inválido.')
+                    setSinglePeriod('')
+                    return
+                  }
+                  setError(null)
+                  setSinglePeriod(period)
+                }}
+                max={periodToInputDate(max)}
+                placeholder="mm/aaaa"
+                className="w-full"
+              />
+            </div>
+          </div>
+          <Button
+            type="button"
+            className="h-10 whitespace-nowrap text-xs"
+            variant="secondary"
+            disabled={!singlePeriod}
+            onClick={() => {
+              if (!singlePeriod || !isValidPeriod(singlePeriod)) {
+                setError('Ingresá un período válido en formato mm/aaaa.')
+                return
+              }
+              if (isFuturePeriod(singlePeriod, max)) {
+                setError('No se permiten períodos futuros')
+                return
+              }
+              if (availableSorted.length > 0 && !availableSorted.includes(singlePeriod)) {
+                setError('El período ingresado no está disponible en los CSV cargados')
+                return
+              }
+
+              setError(null)
+              const nextSet = new Set([...value, singlePeriod])
+              const nextList = Array.from(nextSet).sort()
+              if (!arraysEqual(nextList, [...value].sort())) {
+                onChange(nextList)
+              }
+            }}
+          >
+            Agregar período
+          </Button>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-gray-600">
           Disponibles en CSV: <span className="font-medium">{availableSorted.length}</span> — Seleccionados:{' '}
           <span className="font-medium">{sorted.length}</span>
         </p>
-        <Button
-          type="button"
-          variant="secondary"
-          className="h-8 px-2 text-xs"
-          onClick={() => setShowPeriods((v) => !v)}
-          disabled={sorted.length === 0}
-        >
-          {showPeriods ? 'Ocultar períodos' : 'Mostrar períodos'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-8 px-2 text-xs"
+            onClick={() => {
+              setError(null)
+              if (value.length > 0) onChange([])
+            }}
+            disabled={sorted.length === 0}
+          >
+            Limpiar períodos
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-8 px-2 text-xs"
+            onClick={() => setShowPeriods((v) => !v)}
+            disabled={sorted.length === 0}
+          >
+            {showPeriods ? 'Ocultar períodos' : 'Mostrar períodos'}
+          </Button>
+        </div>
       </div>
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
@@ -246,16 +284,14 @@ export function PeriodSelector({
                 className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-900 ring-1 ring-gray-200"
               >
                 {p}
-                {useRangeFilter ? (
-                  <button
-                    type="button"
-                    onClick={() => remove(p)}
-                    className="rounded-full px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200"
-                    aria-label={`Quitar período ${p}`}
-                  >
-                    ×
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => remove(p)}
+                  className="rounded-full px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200"
+                  aria-label={`Quitar período ${p}`}
+                >
+                  ×
+                </button>
               </span>
             ))}
           </div>

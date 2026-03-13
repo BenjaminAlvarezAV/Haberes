@@ -349,7 +349,7 @@ export function PayrollPage() {
                     available={availablePeriodos}
                     onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
                   />
-              ) : (
+                ) : (
                   <div className="space-y-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-900">
@@ -379,50 +379,11 @@ export function PayrollPage() {
                       </p>
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-900">
-                            Rango desde (mm/aaaa)
-                          </label>
-                          <div className="mt-1">
-                            <DatePicker
-                              value={periodToInputDate(manualFrom)}
-                              onChange={(next) => {
-                                const period = inputDateToPeriod(next)
-                                dispatch({
-                                  type: 'SET_MANUAL_RANGE',
-                                  payload: { from: period, to: manualTo },
-                                })
-                              }}
-                              max={`${currentPeriod()}-31`}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-900">
-                            Rango hasta (mm/aaaa)
-                          </label>
-                          <div className="mt-1">
-                            <DatePicker
-                              value={periodToInputDate(manualTo)}
-                              onChange={(next) => {
-                                const period = inputDateToPeriod(next)
-                                dispatch({
-                                  type: 'SET_MANUAL_RANGE',
-                                  payload: { from: manualFrom, to: period },
-                                })
-                              }}
-                              max={`${currentPeriod()}-31`}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <p className="text-xs text-gray-600">Ambas fechas son obligatorias en modo Manual.</p>
-                    </div>
-                    <p className="text-xs text-gray-600">
-                      Períodos seleccionados: <span className="font-medium">{manualPeriodos.length}</span>
-                    </p>
+                    <PeriodSelector
+                      value={periodos}
+                      available={availablePeriodos}
+                      onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
+                    />
                   </div>
                 )}
               </div>

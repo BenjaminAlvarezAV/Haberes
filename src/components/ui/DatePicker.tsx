@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type DatePickerProps = {
   value: string
@@ -73,6 +73,7 @@ export function DatePicker({
   const [viewYear, setViewYear] = useState(initialView.getFullYear())
   const [viewMonth, setViewMonth] = useState(initialView.getMonth()) // 0-based
   const [inputText, setInputText] = useState<string>(formatDisplay(selectedDate))
+  const rootRef = useRef<HTMLDivElement | null>(null)
 
   const displayValue = formatDisplay(selectedDate)
 
@@ -80,6 +81,22 @@ export function DatePicker({
   useEffect(() => {
     setInputText(displayValue)
   }, [displayValue])
+
+  // Cerrar el popup al hacer clic fuera del componente
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (!rootRef.current) return
+      if (event.target instanceof Node && rootRef.current.contains(event.target)) return
+      setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [open])
 
   const goMonth = (delta: number) => {
     let y = viewYear
@@ -94,16 +111,13 @@ export function DatePicker({
     }
     setViewYear(y)
     setViewMonth(m)
-  }
-
-  const handleSelect = (d: Date) => {
-    const clamped = clampDate(d, min, max)
+    const candidate = new Date(y, m, 1)
+    const clamped = clampDate(candidate, min, max)
     onChange(formatISO(clamped))
-    setOpen(false)
   }
 
   return (
-    <div className={`relative inline-block w-full ${className}`}>
+    <div ref={rootRef} className={`relative inline-block w-full ${className}`}>
       <input
         type="text"
         value={inputText}
@@ -126,7 +140,15 @@ export function DatePicker({
       />
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Si aún no hay valor seleccionado, al abrir por primera vez usamos el mes/año actual
+          // (respetando min/max) para evitar tener que cambiar y volver a seleccionar.
+          if (!open && !selectedDate) {
+            const candidate = clampDate(initialView, min, max)
+            onChange(formatISO(candidate))
+          }
+          setOpen((v) => !v)
+        }}
         className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-gray-400 hover:text-gray-600"
         aria-label="Abrir selector de fecha"
       >
@@ -146,7 +168,13 @@ export function DatePicker({
             <div className="flex items-center gap-2">
               <select
                 value={viewMonth}
-                onChange={(e) => setViewMonth(Number(e.target.value))}
+                onChange={(e) => {
+                  const nextMonth = Number(e.target.value)
+                  setViewMonth(nextMonth)
+                  const candidate = new Date(viewYear, nextMonth, 1)
+                  const clamped = clampDate(candidate, min, max)
+                  onChange(formatISO(clamped))
+                }}
                 className="rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px] text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
               >
                 {MONTHS.map((name, idx) => (
@@ -157,7 +185,13 @@ export function DatePicker({
               </select>
               <select
                 value={viewYear}
-                onChange={(e) => setViewYear(Number(e.target.value))}
+                onChange={(e) => {
+                  const nextYear = Number(e.target.value)
+                  setViewYear(nextYear)
+                  const candidate = new Date(nextYear, viewMonth, 1)
+                  const clamped = clampDate(candidate, min, max)
+                  onChange(formatISO(clamped))
+                }}
                 className="rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px] text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
               >
                 {Array.from({ length: 15 }).map((_, idx) => {
@@ -176,15 +210,6 @@ export function DatePicker({
               onClick={() => goMonth(1)}
             >
               ›
-            </button>
-          </div>
-          <div className="mt-1 flex justify-end">
-            <button
-              type="button"
-              className="rounded bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700"
-              onClick={() => handleSelect(new Date(viewYear, viewMonth, 1))}
-            >
-              Usar mes seleccionado
             </button>
           </div>
         </div>

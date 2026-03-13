@@ -4,7 +4,7 @@ import { fetchChequesForPairs } from '../../services/chequesService'
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
-import { currentPeriod, expandPeriodRange, isFuturePeriod } from '../../utils/period'
+import { currentPeriod, isFuturePeriod } from '../../utils/period'
 import { normalizeCuil } from '../../utils/cuil'
 import type { NormalizedPayroll, PayrollItem } from '../../types/payroll'
 import type { AppError } from '../../types/errors'
@@ -44,24 +44,9 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               return { error: validationError('Ingresá un CUIL/DNI válido (11 o 8 dígitos, sin guiones)') }
             }
 
-            // En modo manual NO dependemos del CSV ni de "availablePeriodos".
-            // Usamos siempre el rango completo DESDE-HASTA.
-            if (!state.manualFrom || !state.manualTo) {
-              return {
-                error: validationError('Completá el rango DESDE y HASTA (fechas) para consultar en modo Manual.'),
-              }
-            }
-
-            const desired = expandPeriodRange(state.manualFrom, state.manualTo)
-            if (desired.length === 0) {
-              return {
-                error: validationError(
-                  'El rango ingresado es inválido. Verificá las fechas y asegurate de que DESDE ≤ HASTA.',
-                ),
-              }
-            }
-
-            return { cuils: [id], periodos: desired }
+            // En modo manual reutilizamos la misma lista de períodos seleccionados (state.periodos)
+            // que en el modo por lote.
+            return { cuils: [id], periodos: state.periodos }
           })()
 
     if ('error' in effective) {
@@ -172,7 +157,10 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           (acc, row) => acc + (row.liquido ?? 0),
           0,
         )
-        if (!Number.isNaN(totalLiquido)) {
+        // Solo agregamos la fila de resumen si hay algún dato distinto de 0
+        // o si el total líquido no es 0. Esto evita generar PDFs vacíos con
+        // todos los importes en 0.
+        if (!Number.isNaN(totalLiquido) && (hasNonZeroDetail || totalLiquido !== 0)) {
           items.push({
             cuil: bundle.id,
             periodo,

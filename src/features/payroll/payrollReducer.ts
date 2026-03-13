@@ -90,8 +90,8 @@ function recomputeFromSources(sources: CsvSource[]): {
   })
   const cuils = Array.from(docs).sort()
   const availablePeriodos = Array.from(periods).sort()
-  // Por defecto, todos los períodos disponibles quedan seleccionados.
-  const periodos = [...availablePeriodos]
+  // Ya no seleccionamos períodos automáticamente al cargar CSV: el usuario decide qué usar.
+  const periodos: string[] = []
   return { cuils, availablePeriodos, periodos }
 }
 
