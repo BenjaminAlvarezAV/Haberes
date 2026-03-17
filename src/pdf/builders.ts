@@ -2,7 +2,7 @@ import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interface
 import type { GroupMode, NormalizedPayroll, PayrollItem } from '../types/payroll'
 import type { ChequesBundle, LiquidPorEstablecimientoItem, LiquidacionPorSecuenciaItem } from '../types/cheques'
 import { groupByAgent, groupByPeriod } from '../utils/grouping'
-import { RECEIPT_FOOTER_TEXT, RECEIPT_HEADER_LINES } from './receiptConstants'
+import { RECEIPT_HEADER_LINES } from './receiptConstants'
 
 function pesos(value: number): string {
   // Similar al recibo ejemplo: sin símbolo $, con coma decimal.
@@ -199,11 +199,6 @@ function boxedBlock(inner: Content, marginBottom: number = 8, roomy: boolean = f
   }
 }
 
-function linesOrDash(lines: string[] | null | undefined): string {
-  const filtered = (lines ?? []).map((s) => s.trim()).filter(Boolean)
-  return filtered.length ? filtered.join('\n') : '—'
-}
-
 export function buildPdfByAgent(
   normalized: NormalizedPayroll,
   selectedAgents?: string[],
@@ -286,6 +281,13 @@ export interface AgentPdf {
   doc: TDocumentDefinitions
 }
 
+// Nuevo: 1 PDF por agente y por período.
+export interface AgentPeriodPdf {
+  cuil: string
+  periodo: string
+  doc: TDocumentDefinitions
+}
+
 function buildReceiptPage({
   documento,
   periodo,
@@ -322,7 +324,8 @@ function buildReceiptPage({
         {
           table: {
             headerRows: 1,
-            widths: ['*', 60, 70, 35, 95, 70],
+            // Achicamos TIPO DOC. y SEXO para dar más espacio a número, CUIL y mes.
+            widths: ['*', 45, 80, 30, 105, 80],
             body: [
               [
                 cell('APELLIDO Y NOMBRE', 'thData'),
@@ -605,42 +608,23 @@ function buildReceiptPage({
           ),
         ]
 
-  const messagesBlock: Content[] =
+  const hasMensajeria =
     cheques?.mensajeria?.mensajeGeneral?.length || cheques?.mensajeria?.mensajesPersonalizados?.length
-      ? [
-          boxedBlock(
-            {
-              stack: [
-                {
-                  table: { widths: ['*'], body: [[cell('MENSAJE GENERAL', 'sectionBox', { fillColor: '#f9fafb' })]] },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                { text: linesOrDash(cheques?.mensajeria?.mensajeGeneral), style: 'tdTiny', margin: [2, 0, 2, 6] },
-                {
-                  table: {
-                    widths: ['*'],
-                    body: [[cell('MENSAJES PERSONALIZADOS', 'sectionBox', { fillColor: '#f9fafb' })]],
-                  },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  text: linesOrDash(cheques?.mensajeria?.mensajesPersonalizados),
-                  style: 'tdTiny',
-                  margin: [2, 0, 2, 0],
-                },
-              ],
-            },
-            10,
-          ),
-        ]
-      : []
 
-  // Texto legal: al final de cada resumen (página), sin romper el pie de página.
-  const legalInline: Content = { text: RECEIPT_FOOTER_TEXT, style: 'legalInline', margin: [0, 2, 0, 0] }
+  // Mostramos todos los mensajes de la API (generales + personalizados)
+  // como texto plano al final, sin recuadros ni títulos.
+  const inlineMessages: string[] = hasMensajeria
+    ? [
+        ...(cheques?.mensajeria?.mensajeGeneral ?? []),
+        ...(cheques?.mensajeria?.mensajesPersonalizados ?? []),
+      ]
+    : []
 
-  return [headerBlock, liquidosBlock, ...secuenciaBlocks, ...messagesBlock, legalInline]
+  const legalInline: Content[] = inlineMessages.length
+    ? [{ text: inlineMessages.join('\n\n'), style: 'legalInline', margin: [0, 2, 0, 0] }]
+    : []
+
+  return [headerBlock, liquidosBlock, ...secuenciaBlocks, ...legalInline]
 }
 
 // Nuevo requerimiento: generar 1 PDF por agente (descarga múltiple)
@@ -649,7 +633,7 @@ export function buildAgentPdfs(
   chequesByKey?: Record<string, ChequesBundle>,
   selectedAgents?: string[],
   selectedPeriods?: string[],
-): AgentPdf[] {
+): AgentPeriodPdf[] {
   const filtered: NormalizedPayroll = {
     ...normalized,
     items: normalized.items.filter(
@@ -660,31 +644,29 @@ export function buildAgentPdfs(
   }
 
   const { byCuil, orderedCuils } = groupByAgent(filtered)
-  return orderedCuils.map((cuil) => {
+
+  // Devolvemos un PDF por combinación (agente, período).
+  const out: AgentPeriodPdf[] = []
+  for (const cuil of orderedCuils) {
     const items = byCuil[cuil]
     const agentName = normalized.agents.find((a) => a.cuil === cuil)?.nombre ?? ''
 
-    // En modo "por agente": un PDF por documento, con 1 página por período.
     const periods = Array.from(new Set(items.map((it) => it.periodo))).sort()
-    const content: Content[] = []
-    for (let i = 0; i < periods.length; i += 1) {
-      const p = periods[i]
+    for (const p of periods) {
       const pageItems = items.filter((it) => it.periodo === p)
       const key = `${cuil}-${p.replace('-', '')}`
-      content.push(
-        ...buildReceiptPage({
-          documento: cuil,
-          periodo: p,
-          items: pageItems,
-          agentName,
-          cheques: chequesByKey?.[key],
-        }),
-      )
-      if (i < periods.length - 1) content.push({ text: ' ', pageBreak: 'after' })
+      const content: Content[] = buildReceiptPage({
+        documento: cuil,
+        periodo: p,
+        items: pageItems,
+        agentName,
+        cheques: chequesByKey?.[key],
+      })
+      out.push({ cuil, periodo: p, doc: receiptDoc(content) })
     }
+  }
 
-    return { cuil, doc: receiptDoc(content) }
-  })
+  return out
 }
 
 // Nuevo requerimiento: generar 1 PDF por período (descarga múltiple)

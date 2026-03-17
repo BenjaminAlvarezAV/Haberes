@@ -115,6 +115,8 @@ export function normalizeMensajeria(raw: unknown): MensajeriaMessages {
   if (!parsed.success) return { mensajeGeneral: [], mensajesPersonalizados: [] }
   const r = parsed.data as Record<string, unknown>
   const container =
+    // Algunos servicios envuelven la mensajería dentro de una clave "mensajeria".
+    (r['mensajeria'] as unknown) ??
     (r['data'] as unknown) ??
     (r['result'] as unknown) ??
     (r['resultado'] as unknown) ??
@@ -122,7 +124,14 @@ export function normalizeMensajeria(raw: unknown): MensajeriaMessages {
   const p2 = objSchema.safeParse(container)
   const c = p2.success ? (p2.data as Record<string, unknown>) : r
 
-  const mg = c['mensajeGeneral'] ?? c['MensajeGeneral'] ?? c['general'] ?? c['General'] ?? []
+  const mg =
+    c['mensajeGeneral'] ??
+    c['MensajeGeneral'] ??
+    c['mensajesGenerales'] ??
+    c['MensajesGenerales'] ??
+    c['general'] ??
+    c['General'] ??
+    []
   const mp =
     c['mensajesPersonalizados'] ??
     c['MensajesPersonalizados'] ??
