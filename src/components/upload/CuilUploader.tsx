@@ -107,8 +107,8 @@ export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploader
         <div>
           <label className="block text-sm font-medium text-gray-900">Archivo Sercope (CSV)</label>
           <p className="text-xs text-gray-600">
-            Columnas: Documento (8), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM), Secuencia (000). No
-            se permiten períodos futuros.
+            Columnas: Documento (DNI 8 o CUIL 11), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM),
+            Secuencia (000). No se permiten períodos futuros.
           </p>
         </div>
         <button

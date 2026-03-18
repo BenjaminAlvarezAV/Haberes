@@ -12,8 +12,8 @@ describe('parseSercopeCsvTextDetailed', () => {
     const res = parseSercopeCsvTextDetailed(csv, '202412')
 
     // La fila con documento/desde/hasta/secuencia idénticos se considera duplicada.
-    expect(res.report.valid).toBe(2)
-    expect(res.report.duplicates).toBe(1)
+    expect(res.report.valid).toBe(1)
+    expect(res.report.duplicates).toBe(2)
     expect(res.documentos).toEqual(['12345678'])
     expect(res.rows[0]).toEqual({
       documento: '12345678',
@@ -21,6 +21,17 @@ describe('parseSercopeCsvTextDetailed', () => {
       periodoHasta: '202402',
       secuencia: '001',
     })
+  })
+
+  it('acepta CUIL (11) en Documento', () => {
+    const csv = `Documento,PeriodoDesde,PeriodoHasta,Secuencia
+20-12345678-3,202401,202401,1
+`
+
+    const res = parseSercopeCsvTextDetailed(csv, '202412')
+    expect(res.report.valid).toBe(1)
+    expect(res.documentos).toEqual(['20123456783'])
+    expect(res.rows[0]?.documento).toBe('20123456783')
   })
 
   it('rechaza rangos inválidos y períodos futuros', () => {

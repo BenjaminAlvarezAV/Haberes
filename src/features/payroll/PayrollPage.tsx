@@ -695,19 +695,7 @@ export function PayrollPage() {
                               ))}
                             </ul>
                           </div>
-                          {!onlyGeneric ? (
-                            <div>
-                              <p className="font-semibold">Detalle completo</p>
-                              <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto pr-1">
-                                {data.errors.map((e, idx) => (
-                                  <li key={`${e.cuil}-${idx}`}>
-                                    <span className="font-mono">{e.cuil}</span>{' '}
-                                    <span className="text-gray-700">– {e.message}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          ) : null}
+                          {/* Ocultamos "Detalle completo": solo mostramos el resumen por documento. */}
                         </div>
                       )
                     })()

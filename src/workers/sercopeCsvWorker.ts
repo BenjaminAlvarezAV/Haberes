@@ -42,7 +42,8 @@ function normalizeRow(parts: string[], maxYYYYMM: string): ParseSercopeRow | nul
   const periodoHasta = normalizeDigits(parts[2] ?? '')
   const secuencia = normalizeDigits(parts[3] ?? '').padStart(3, '0')
 
-  if (!/^\d{8}$/.test(documento)) return null
+  // Permitimos DNI (8) o CUIL (11). La lógica de consulta/validación se aplica más adelante.
+  if (!/^\d{8}$/.test(documento) && !/^\d{11}$/.test(documento)) return null
   if (!isValidYYYYMM(periodoDesde) || !isValidYYYYMM(periodoHasta)) return null
   if (!/^\d{3}$/.test(secuencia)) return null
   if (periodoDesde > periodoHasta) return null

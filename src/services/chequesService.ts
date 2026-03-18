@@ -6,6 +6,7 @@ import {
   normalizeMensajeria,
 } from '../utils/normalizeChequesResponse'
 import { mapLimit } from '../utils/promise'
+import type { LiquidacionPorSecuenciaItem } from '../types/cheques'
 
 const chequesClient = axios.create({
   // En dev usamos el proxy de Vite; en prod se puede setear por env.
@@ -98,6 +99,31 @@ export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Pro
     mensajeria: msg,
     ...(errors.length ? { errors } : {}),
   }
+}
+
+export async function fetchLiquidacionPorSecuencia(
+  id: string,
+  periodoYYYYMM: string,
+): Promise<{ rows: LiquidacionPorSecuenciaItem[]; errors: string[] }> {
+  const errors: string[] = []
+  const rows =
+    (await fetchWithRetries(
+      () =>
+        chequesClient
+          .get<unknown>(`/wsstestsigue/cheques/liquidacionPorSecuencia/${id}/${periodoYYYYMM}`)
+          .then((r) => normalizeLiquidacionPorSecuencia(r.data)),
+      'liquidacionPorSecuencia',
+      errors,
+    )) ?? []
+
+  return { rows, errors }
+}
+
+export function extractCuilFromLiquidacion(rows: LiquidacionPorSecuenciaItem[]): string | null {
+  for (const r of rows) {
+    if (r.cuitCuil && typeof r.cuitCuil === 'string' && r.cuitCuil.trim()) return r.cuitCuil
+  }
+  return null
 }
 
 export type ChequesBundleMap = Record<string, ChequesBundle>

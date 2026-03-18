@@ -139,7 +139,8 @@ export function parseSercopeCsvTextDetailed(
     const periodoHasta = normalizeDigits(parts[2])
     const secuencia = normalizeDigits(parts[3]).padStart(3, '0')
 
-    if (!/^\d{8}$/.test(documento)) {
+    // Permitimos DNI (8) o CUIL (11). La lógica de consulta/validación se aplica más adelante.
+    if (!/^\d{8}$/.test(documento) && !/^\d{11}$/.test(documento)) {
       invalidLines.push(trimmed)
       continue
     }

@@ -1,6 +1,10 @@
 import { useCallback, useMemo, useReducer } from 'react'
 import type { ReactNode } from 'react'
-import { fetchChequesForPairs } from '../../services/chequesService'
+import {
+  extractCuilFromLiquidacion,
+  fetchChequesForPairs,
+  fetchLiquidacionPorSecuencia,
+} from '../../services/chequesService'
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
@@ -8,11 +12,19 @@ import { currentPeriod, isFuturePeriod } from '../../utils/period'
 import { normalizeCuil } from '../../utils/cuil'
 import type { NormalizedPayroll, PayrollItem } from '../../types/payroll'
 import type { AppError } from '../../types/errors'
+import { mapLimit } from '../../utils/promise'
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
 
   const consult = useCallback(async () => {
+    const deriveDniFromCuil = (raw: string): string | null => {
+      const cleaned = normalizeCuil(raw)
+      if (!/^\d{11}$/.test(cleaned)) return null
+      // CUIL (11) -> DNI (8): quitamos primeros 2 y último
+      return cleaned.slice(2, 10)
+    }
+
     // CSV obligatorio solo para modo "lote".
     if (state.queryMode === 'batch' && state.cuils.length === 0) {
       dispatch({
@@ -73,9 +85,122 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
     dispatch({ type: 'FETCH_START' })
     try {
+      // Si el usuario ingresa 11 dígitos asumimos CUIL, pero la API consulta por DNI.
+      // Entonces: derivamos DNI (8) para consultar, y luego validamos contra el CUIL que devuelve el servicio.
+      const expectedCuilsByRequestedId = new Map<string, Set<string>>() // dni -> cuil(s) ingresado(s)
+      const requestedIds: string[] = []
+
+      for (const raw of effective.cuils) {
+        const cleaned = normalizeCuil(raw)
+
+        if (cleaned.length === 11) {
+          const dni = deriveDniFromCuil(cleaned)
+          if (!dni || dni.length !== 8) {
+            dispatch({
+              type: 'FETCH_ERROR',
+              payload: validationError(`No se pudo derivar un DNI válido a partir del CUIL ingresado (${cleaned}).`),
+            })
+            return
+          }
+
+          const set = expectedCuilsByRequestedId.get(dni) ?? new Set<string>()
+          set.add(cleaned)
+          expectedCuilsByRequestedId.set(dni, set)
+          requestedIds.push(dni)
+          continue
+        }
+
+        requestedIds.push(cleaned)
+      }
+
+      const uniqueRequestedIds = Array.from(new Set(requestedIds)).filter(
+        (id) => /^\d+$/.test(id) && (id.length === 8 || id.length === 11),
+      )
+
+      // 3) Construimos la "nómina" a partir de cheques,
+      //    respetando los importes y descripciones que vienen de los endpoints.
+      const items: PayrollItem[] = []
+      const rawErrors: { cuil: string; message: string; periodo: string }[] = []
+
+      // Para detectar si un documento falló en TODOS los períodos consultados.
+      const totalPeriodsByCuil = new Map<string, Set<string>>()
+      const errorPeriodsByCuil = new Map<string, Set<string>>()
+
+      function registerError(cuil: string, periodo: string, message: string) {
+        rawErrors.push({ cuil, message, periodo })
+        const set = errorPeriodsByCuil.get(cuil) ?? new Set<string>()
+        set.add(periodo)
+        errorPeriodsByCuil.set(cuil, set)
+      }
+
+      // Validar 1 vez por DNI (solo para los que vienen de CUIL),
+      // usando el primer período seleccionado como "probe".
+      const invalidIds = new Set<string>() // ids (DNI) para los que detectamos mismatch y no consultamos más
+      const mismatchReported = new Set<string>()
+      const probePeriodo = effective.periodos[0] ?? ''
+      const probePeriodoYYYYMM = probePeriodo.replace('-', '')
+
+      const idsToValidate = uniqueRequestedIds.filter((id) => expectedCuilsByRequestedId.has(id))
+      if (idsToValidate.length > 0 && /^\d{6}$/.test(probePeriodoYYYYMM)) {
+        dispatch({
+          type: 'SET_FETCH_PROGRESS',
+          payload: { label: 'Validando CUIL/DNI…', current: 0, total: idsToValidate.length },
+        })
+
+        let validated = 0
+        await mapLimit(idsToValidate, 6, async (id) => {
+          const expectedSet = expectedCuilsByRequestedId.get(id)
+          if (!expectedSet || expectedSet.size === 0) return null
+          const expectedList = Array.from(expectedSet).sort()
+
+          const { rows } = await fetchLiquidacionPorSecuencia(id, probePeriodoYYYYMM)
+          const returnedRaw = extractCuilFromLiquidacion(rows)
+          const returned = returnedRaw ? normalizeCuil(returnedRaw) : null
+
+          // Si el servicio devuelve un CUIL, lo validamos contra los candidatos ingresados.
+          // Si no devuelve CUIL, no bloqueamos (dejamos pasar para no falsear negativos).
+          if (returned) {
+            const isMatch = expectedSet.has(returned)
+            if (!isMatch) {
+              invalidIds.add(id)
+              if (!mismatchReported.has(id)) {
+                mismatchReported.add(id)
+                registerError(
+                  id,
+                  probePeriodo,
+                  `El/los CUIL ingresado(s) para el DNI ${id} no coinciden con el CUIL devuelto por el servicio (${returned}). Se omitió la consulta para ese DNI. Ingresados: ${expectedList.join(
+                    ', ',
+                  )}.`,
+                )
+              }
+            } else if (expectedSet.size > 1 && !mismatchReported.has(id)) {
+              // Caso pedido: mismo DNI con múltiples CUIL en CSV, pero uno coincide.
+              mismatchReported.add(id)
+              const others = expectedList.filter((c) => c !== returned)
+              registerError(
+                id,
+                probePeriodo,
+                `El DNI ${id} aparece con múltiples CUIL en el CSV. El servicio validó como correcto: ${returned}.${
+                  others.length ? ` Se ignoraron: ${others.join(', ')}.` : ''
+                }`,
+              )
+            }
+          }
+
+          validated += 1
+          dispatch({
+            type: 'SET_FETCH_PROGRESS',
+            payload: { label: 'Validando CUIL/DNI…', current: validated, total: idsToValidate.length },
+          })
+          return null
+        })
+      }
+
+      const validatedRequestedIds = uniqueRequestedIds.filter((id) => !invalidIds.has(id))
+
       // 1) A partir de los CUILs y períodos efectivos armamos todos los pares (doc + período YYYYMM)
       const pairKeys = new Set<string>()
-      const pairs = effective.cuils
+      const pairs = validatedRequestedIds
         .flatMap((id) =>
           effective.periodos.map((p) => {
             const periodoYYYYMM = p.replace('-', '')
@@ -105,22 +230,6 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               },
             })
           : {}
-
-      // 3) Construimos la "nómina" a partir de cheques,
-      //    respetando los importes y descripciones que vienen de los endpoints.
-      const items: PayrollItem[] = []
-      const rawErrors: { cuil: string; message: string; periodo: string }[] = []
-
-      // Para detectar si un documento falló en TODOS los períodos consultados.
-      const totalPeriodsByCuil = new Map<string, Set<string>>()
-      const errorPeriodsByCuil = new Map<string, Set<string>>()
-
-      const registerError = (cuil: string, periodo: string, message: string) => {
-        rawErrors.push({ cuil, message, periodo })
-        const set = errorPeriodsByCuil.get(cuil) ?? new Set<string>()
-        set.add(periodo)
-        errorPeriodsByCuil.set(cuil, set)
-      }
 
       Object.values(chequesMap).forEach((bundle) => {
         const periodo = `${bundle.periodoYYYYMM.slice(0, 4)}-${bundle.periodoYYYYMM.slice(4, 6)}`

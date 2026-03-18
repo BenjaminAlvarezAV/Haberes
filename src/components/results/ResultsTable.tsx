@@ -1,4 +1,5 @@
 import type { PayrollItem } from '../../types/payroll'
+import { Fragment } from 'react'
 
 function formatCurrency(value: number): string {
   return value.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })
@@ -27,12 +28,12 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
         <tbody className="divide-y divide-gray-100">
           {sorted.map((it, idx) => {
             const prev = idx > 0 ? sorted[idx - 1] : null
-            const showSeparator = prev && prev.periodo !== it.periodo
+            const showSeparator = idx === 0 || (prev && prev.periodo !== it.periodo)
 
             return (
-              <>
+              <Fragment key={`${it.cuil}-${it.periodo}-${idx}`}>
                 {showSeparator ? (
-                  <tr key={`sep-${it.periodo}-${idx}`}>
+                  <tr>
                     <td
                       colSpan={4}
                       className="bg-gray-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-gray-700"
@@ -41,7 +42,7 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
                     </td>
                   </tr>
                 ) : null}
-                <tr key={`${it.cuil}-${it.periodo}-${idx}`} className="hover:bg-gray-50">
+                <tr className="hover:bg-gray-50">
                   <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-700">
                     {it.cuil}
                   </td>
@@ -51,7 +52,7 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
                     {formatCurrency(it.importe)}
                   </td>
                 </tr>
-              </>
+              </Fragment>
             )
           })}
         </tbody>
