@@ -16,7 +16,17 @@ function toString(value: unknown): string | null {
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string') {
-    const normalized = value.replace(/\./g, '').replace(',', '.').trim()
+    const raw = value.trim()
+    // Soportar ambos formatos:
+    // - "1234.56" (decimal con punto)
+    // - "1.234,56" (miles con punto, decimal con coma)
+    // - "1234,56" (decimal con coma)
+    let normalized = raw
+    if (raw.includes(',') && raw.includes('.')) {
+      normalized = raw.replace(/\./g, '').replace(',', '.')
+    } else if (raw.includes(',')) {
+      normalized = raw.replace(',', '.')
+    }
     const n = Number(normalized)
     return Number.isFinite(n) ? n : null
   }
@@ -100,6 +110,8 @@ export function normalizeLiquidacionPorSecuencia(raw: unknown): LiquidacionPorSe
       apoyoReal: pickFirst(o, ['apoyoReal', 'apoyo', 'apoyoRealDesc'], toString),
       cargoInt: pickFirst(o, ['cargoInt', 'cargoInterino', 'cargoInter'], toString),
       apoyoInt: pickFirst(o, ['apoyoInt', 'apoyoInterino', 'apoyoInter'], toString),
+      antig: pickFirst(o, ['antig', 'antiguedad'], toString),
+      inas: pickFirst(o, ['inas', 'inasistencias'], toString),
       codigo: pickFirst(o, ['codigo', 'cod'], toString),
       descripcionCodigo: pickFirst(o, ['descripcionCodigo', 'desc', 'descripcion'], toString),
       pesos: pickFirst(o, ['pesos', 'importe', 'monto'], toNumber),

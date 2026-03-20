@@ -88,6 +88,7 @@ export function PayrollPage() {
     cuils,
     availablePeriodos,
     periodos,
+    batchUseManualPeriods,
     queryMode,
     manualCuil,
     manualMonth,
@@ -181,16 +182,17 @@ export function PayrollPage() {
     if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return false
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
       const p = pdfs[i]
-      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil) return true
+      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) return true
     }
     return false
   }, [pdfs, preview, previewIndex, groupMode])
+
 
   const hasNextPeriodInAgent = useMemo(() => {
     if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return false
     for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
       const p = pdfs[i]
-      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil) return true
+      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) return true
     }
     return false
   }, [pdfs, preview, previewIndex, groupMode])
@@ -199,7 +201,7 @@ export function PayrollPage() {
     if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
       const p = pdfs[i]
-      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil) {
+      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) {
         setPreviewIndex(i)
         return
       }
@@ -210,12 +212,13 @@ export function PayrollPage() {
     if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return
     for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
       const p = pdfs[i]
-      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil) {
+      if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) {
         setPreviewIndex(i)
         return
       }
     }
   }, [pdfs, preview, previewIndex, groupMode])
+
 
   const hasPrevAgent = useMemo(() => {
     if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return false
@@ -284,7 +287,9 @@ export function PayrollPage() {
       if (groupMode === 'agent') {
         // Buscar primero por CUIL y luego por período.
         let targetIndex = pdfs.findIndex(
-          (p) => 'cuil' in p && (p.cuil.toLowerCase().startsWith(q) || p.periodo.toLowerCase().startsWith(q)),
+          (p) =>
+            'cuil' in p &&
+            (p.cuil.toLowerCase().startsWith(q) || p.periodo.toLowerCase().startsWith(q)),
         )
         if (targetIndex === -1) {
           // fallback: contiene en período
@@ -316,6 +321,7 @@ export function PayrollPage() {
         payload: {
           name: payload.fileName,
           documentos: payload.documentos,
+          rows: payload.rows,
           periodos: payload.periodos,
           report: payload.report,
         },
@@ -338,7 +344,8 @@ export function PayrollPage() {
   }, [manualFrom, manualTo])
 
   const effectiveDocCount = queryMode === 'manual' ? (manualIdValid ? 1 : 0) : cuils.length
-  const effectivePeriodCount = queryMode === 'manual' ? manualPeriodos.length : periodos.length
+  const effectivePeriodCount =
+    queryMode === 'manual' ? manualPeriodos.length : batchUseManualPeriods ? periodos.length : availablePeriodos.length
 
   useEffect(() => {
     if (previewIndex >= pdfs.length && pdfs.length > 0) {
@@ -489,11 +496,31 @@ export function PayrollPage() {
                 </div>
 
                 {queryMode === 'batch' ? (
-                  <PeriodSelector
-                    value={periodos}
-                    available={availablePeriodos}
-                    onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
-                  />
+                  <div className="space-y-3">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-900 select-none">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-blue-600"
+                        checked={batchUseManualPeriods}
+                        onChange={(e) =>
+                          dispatch({ type: 'SET_BATCH_USE_MANUAL_PERIODS', payload: e.target.checked })
+                        }
+                      />
+                      Seleccionar períodos manualmente
+                    </label>
+                    {!batchUseManualPeriods ? (
+                      <p className="text-xs text-gray-600">
+                        Se usan automáticamente los rangos por DNI que vienen en el CSV (Periodo Desde/Hasta).
+                      </p>
+                    ) : null}
+                    {batchUseManualPeriods ? (
+                      <PeriodSelector
+                        value={periodos}
+                        available={availablePeriodos}
+                        onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
+                      />
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     <div>

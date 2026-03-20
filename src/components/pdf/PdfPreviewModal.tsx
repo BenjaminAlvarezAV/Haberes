@@ -62,7 +62,7 @@ export function PdfPreviewModal({
   return (
     <Modal title="Vista previa del PDF" onClose={onClose}>
       <div className="flex flex-col gap-2 pb-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             {metaLabel ? <p className="text-sm font-semibold text-gray-900">{metaLabel}</p> : null}
             <p className="text-xs text-gray-700">
@@ -95,9 +95,9 @@ export function PdfPreviewModal({
               </div>
             ) : null}
           </div>
-          <div className="flex flex-col items-end gap-1 text-xs">
+          <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
             {(onPrevAgent || onNextAgent) && (
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 rounded-md bg-gray-50 px-2 py-1 ring-1 ring-gray-200">
                 <span className="text-gray-600">Agente</span>
                 <Button
                   type="button"
@@ -119,7 +119,7 @@ export function PdfPreviewModal({
                 </Button>
               </div>
             )}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 rounded-md bg-gray-50 px-2 py-1 ring-1 ring-gray-200">
               <span className="text-gray-600">Período / página</span>
               <Button
                 type="button"

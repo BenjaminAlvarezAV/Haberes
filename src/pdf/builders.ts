@@ -90,6 +90,8 @@ type SecuenciaGroup = {
     periodoLiq: string
     ordenPago: string
     direccion: string
+    antiguedad: string
+    inasistencias: string
   }
   items: LiquidacionPorSecuenciaItem[]
 }
@@ -103,11 +105,12 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
     const secu = (it.secu ?? '').trim()
     const nombreEstab = (it.nombreEstab ?? '').trim()
     const rev = (it.rev ?? '').trim()
-    const oPid = (it.oPid ?? '').trim()
     const periodoLiq = yyyymmToPeriod(it.mesaPago)?.trim() || yyyymmToPeriod(it.fecAfec)?.trim() || fallbackPeriodo
 
     const estabCode = tipoOrg && numero ? `${tipoOrg}-${numero}` : '—'
-    const key = [estabCode, secu, rev, oPid, periodoLiq, nombreEstab].join('|')
+    // No separamos por oPid para evitar bloques duplicados casi idénticos en el PDF.
+    // El/los oPid se informan en conjunto dentro del bloque.
+    const key = [estabCode, secu, rev, periodoLiq, nombreEstab].join('|')
 
     if (!map.has(key)) {
       map.set(key, {
@@ -129,8 +132,10 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
           cargoInt: it.cargoInt ?? '—',
           apoyoInt: it.apoyoInt ?? '—',
           periodoLiq: mesPago(periodoLiq),
-          ordenPago: oPid ? `ORDEN DE PAGO: ${oPid}` : '—',
+          ordenPago: '—',
           direccion: it.direccion ?? '—',
+          antiguedad: (it.antig ?? '').trim() || '—',
+          inasistencias: (it.inas ?? '').trim() || '0.00',
         },
         items: [],
       })
@@ -140,7 +145,19 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
   }
 
   // Orden estable: por estabCode, secuencia, revista
-  return Array.from(map.values()).sort((a, b) => {
+  const out = Array.from(map.values())
+  for (const g of out) {
+    const opids = Array.from(
+      new Set(
+        g.items
+          .map((x) => (x.oPid ?? '').trim())
+          .filter((x) => x.length > 0),
+      ),
+    )
+    g.meta.ordenPago = opids.length > 0 ? `ORDEN DE PAGO: ${opids.join(', ')}` : '—'
+  }
+
+  return out.sort((a, b) => {
     const aKey = `${a.meta.estabCode}-${a.meta.secuencia}-${a.meta.revista}`
     const bKey = `${b.meta.estabCode}-${b.meta.secuencia}-${b.meta.revista}`
     return aKey.localeCompare(bKey)
@@ -302,15 +319,19 @@ function buildReceiptPage({
   cheques?: ChequesBundle
 }): Content[] {
   const now = new Date()
-  const total = cheques?.liquidPorEstablecimiento?.length
-    ? sumLiquid(cheques.liquidPorEstablecimiento)
-    : sectionTotal(items)
   const { haberes, descuentos } = splitHaberes(items)
 
-  const head = cheques?.liquidacionPorSecuencia?.[0]
+  const secuGroups: SecuenciaGroup[] =
+    cheques?.liquidacionPorSecuencia?.length
+      ? groupBySecuencia(cheques.liquidacionPorSecuencia, periodo)
+      : []
+
+  const head = secuGroups[0]?.items?.[0] ?? cheques?.liquidacionPorSecuencia?.[0]
   const nombre = head?.apYNom ?? agentName
   const sexo = head?.sexo ?? '—'
   const cuitCuil = head?.cuitCuil ? head.cuitCuil : '—'
+  const liquidRows = cheques?.liquidPorEstablecimiento ?? []
+  const total = liquidRows.length > 0 ? sumLiquid(liquidRows) : sectionTotal(items)
 
   const headerBlock = boxedBlock(
     {
@@ -374,8 +395,8 @@ function buildReceiptPage({
             cell('ORDEN DE PAGO', 'thSmall'),
             cell('PESOS', 'thSmall', { alignment: 'right' }),
           ],
-          ...(cheques?.liquidPorEstablecimiento?.length
-            ? cheques.liquidPorEstablecimiento.map((r) => [
+          ...(liquidRows.length > 0
+            ? liquidRows.map((r) => [
                 cell(formatEstablecimientoRow(r), 'td'),
                 cell(r.secu == null ? '—' : String(r.secu), 'td'),
                 cell(mesPago(yyyymmToPeriod(r.perOpago) ?? periodo), 'td'),
@@ -408,17 +429,17 @@ function buildReceiptPage({
     8,
   )
 
-  const secuGroups: SecuenciaGroup[] =
-    cheques?.liquidacionPorSecuencia?.length
-      ? groupBySecuencia(cheques.liquidacionPorSecuencia, periodo)
-      : []
-
   const secuenciaBlocks: Content[] =
     secuGroups.length > 0
       ? secuGroups.flatMap((g) => {
           const caracteristicasBlock = boxedBlock(
             {
               stack: [
+                {
+                  text: `${String(g.meta.secuencia).padStart(4, '0')}  ${g.meta.estabCode}-${g.meta.revista}`,
+                  style: 'section',
+                  margin: [0, 0, 0, 4],
+                },
                 {
                   table: {
                     widths: ['*'],
@@ -430,19 +451,23 @@ function buildReceiptPage({
                 {
                   table: {
                     headerRows: 1,
-                    widths: [95, 70, 75, '*'],
+                    widths: [90, 58, 88, 55, 70, 45],
                     body: [
                       [
                         cell('ESTABLEC.', 'thTiny'),
                         cell('CATEGORIA', 'thTiny'),
-                        cell('DESFAVOR.', 'thTiny'),
+                        cell('DESFAVORABILIDAD', 'thTiny'),
                         cell('SECCIONES', 'thTiny'),
+                        cell('ES CARCEL', 'thTiny'),
+                        cell('TURNOS', 'thTiny'),
                       ],
                       [
                         cell(g.meta.estabCode, 'tdTiny'),
                         cell(g.meta.categoria, 'tdTiny'),
                         cell(g.meta.desfavor, 'tdTiny'),
                         cell(g.meta.secciones, 'tdTiny'),
+                        cell(g.meta.esCarcel, 'tdTiny'),
+                        cell(g.meta.turnos, 'tdTiny'),
                       ],
                     ],
                   },
@@ -452,18 +477,18 @@ function buildReceiptPage({
                 {
                   table: {
                     headerRows: 1,
-                    widths: [70, 75, 60, '*'],
+                    widths: [70, 80, 65, '*'],
                     body: [
                       [
-                        cell('ES CARCEL', 'thTiny'),
                         cell('DOBLE ESC.', 'thTiny'),
-                        cell('TURNOS', 'thTiny'),
+                        cell('CARGO REAL', 'thTiny'),
+                        cell('C.HORARIA', 'thTiny'),
                         cell('DIRECCIÓN', 'thTiny'),
                       ],
                       [
-                        cell(g.meta.esCarcel, 'tdTiny'),
                         cell(g.meta.dobleEscol, 'tdTiny'),
-                        cell(g.meta.turnos, 'tdTiny'),
+                        cell(g.meta.cargoReal, 'tdTiny'),
+                        cell(g.meta.choraria, 'tdTiny'),
                         cell(g.meta.direccion, 'tdTiny'),
                       ],
                     ],
@@ -474,13 +499,22 @@ function buildReceiptPage({
                 {
                   table: {
                     headerRows: 1,
-                    widths: [160, '*'],
+                    widths: [150, '*', 70],
                     body: [
-                      [cell('NOMBRE DEL ESTABLECIMIENTO', 'thTiny'), cell('VALOR', 'thTiny')],
-                      [cell(g.meta.nombreEstab, 'tdTiny'), cell('—', 'tdTiny')],
+                      [
+                        cell('NOMBRE DEL ESTABLECIMIENTO', 'thTiny'),
+                        cell('ORDEN DE PAGO', 'thTiny'),
+                        cell('PERIODO', 'thTiny'),
+                      ],
+                      [cell(g.meta.nombreEstab, 'tdTiny'), cell(g.meta.ordenPago, 'tdTiny'), cell(g.meta.periodoLiq, 'tdTiny')],
                     ],
                   },
                   layout: boxedLayout,
+                },
+                {
+                  text: `RURAL ARTICULACION: ${g.meta.desfavor}   DIAS TRABAJADOS: —   INASISTENCIAS: ${g.meta.inasistencias}   ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}`,
+                  style: 'tdTiny',
+                  margin: [0, 4, 0, 0],
                 },
               ],
             },
@@ -523,21 +557,17 @@ function buildReceiptPage({
                 {
                   table: {
                     headerRows: 1,
-                    widths: ['*', '*', '*', 75, 120],
+                    widths: ['*', '*', '*'],
                     body: [
                       [
                         cell('APOYO REAL', 'thTiny'),
                         cell('CARGO INT.', 'thTiny'),
                         cell('APOYO INT.', 'thTiny'),
-                        cell('PERIODO LIQ.', 'thTiny'),
-                        cell('ORDEN DE PAGO', 'thTiny'),
                       ],
                       [
                         cell(g.meta.apoyoReal, 'tdTiny'),
                         cell(g.meta.cargoInt, 'tdTiny'),
                         cell(g.meta.apoyoInt, 'tdTiny'),
-                        cell(g.meta.periodoLiq, 'tdTiny'),
-                        cell(g.meta.ordenPago, 'tdTiny'),
                       ],
                     ],
                   },
@@ -575,8 +605,8 @@ function buildReceiptPage({
 
           return [
             {
+              // Permite corte entre páginas para evitar "página 1 en blanco".
               stack: [caracteristicasBlock, secuenciaBlock, conceptosBlock],
-              unbreakable: true,
             },
           ]
         })
@@ -621,7 +651,17 @@ function buildReceiptPage({
     : []
 
   const legalInline: Content[] = inlineMessages.length
-    ? [{ text: inlineMessages.join('\n\n'), style: 'legalInline', margin: [0, 2, 0, 0] }]
+    ? [
+        boxedBlock(
+          {
+            stack: [
+              { text: 'MENSAJERIA', style: 'sectionBox', margin: [0, 0, 0, 4] },
+              { text: inlineMessages.join('\n\n'), style: 'legalInline', margin: [0, 0, 0, 0] },
+            ],
+          },
+          0,
+        ),
+      ]
     : []
 
   return [headerBlock, liquidosBlock, ...secuenciaBlocks, ...legalInline]
@@ -764,8 +804,8 @@ function receiptDoc(content: Content[]): TDocumentDefinitions {
   const printedDate = formatDateDDMMYYYY(new Date())
   return {
     pageSize: 'A4',
-    // Reservamos espacio para que el texto legal no pise el pie de página.
-    pageMargins: [40, 40, 40, 90],
+    // Un margen inferior más acotado ayuda a evitar páginas casi vacías.
+    pageMargins: [40, 40, 40, 70],
     content,
     // Sin marca de agua (requerimiento).
     footer: (currentPage: number, pageCount: number) => ({
@@ -791,7 +831,7 @@ function receiptDoc(content: Content[]): TDocumentDefinitions {
       tdTiny: { fontSize: 7.4, color: '#111827' },
       tdData: { fontSize: 8.6, color: '#111827' },
       legal: { fontSize: 7.8, color: '#111827', lineHeight: 1.15 },
-      legalInline: { fontSize: 6.4, color: '#111827', lineHeight: 1.05 },
+      legalInline: { fontSize: 7.2, color: '#111827', lineHeight: 1.15 },
       footer: { fontSize: 7.5, color: '#111827' },
       footerCenter: { fontSize: 7.3, color: '#111827', lineHeight: 1.1 },
     },

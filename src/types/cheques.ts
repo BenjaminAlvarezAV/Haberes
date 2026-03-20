@@ -44,6 +44,8 @@ export interface LiquidacionPorSecuenciaItem {
   apoyoReal: string | null
   cargoInt: string | null
   apoyoInt: string | null
+  antig: string | null
+  inas: string | null
 
   // Detalle de haberes/descuentos
   codigo: string | null

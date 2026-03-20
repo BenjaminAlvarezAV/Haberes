@@ -9,6 +9,7 @@ export interface PayrollStateShape {
   cuils: string[]
   availablePeriodos: string[]
   periodos: string[]
+  batchUseManualPeriods: boolean
   queryMode: QueryMode
   manualCuil: string
   manualMonth: string

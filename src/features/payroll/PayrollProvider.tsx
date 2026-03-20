@@ -8,8 +8,16 @@ import {
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
-import { currentPeriod, isFuturePeriod } from '../../utils/period'
+import { currentPeriod, expandYYYYMMRange, isFuturePeriod } from '../../utils/period'
 import { normalizeCuil } from '../../utils/cuil'
+import {
+  type SecuenciaFilterSpec,
+  filterChequesBundleBySecuencia,
+  filterSpecFromCsvSecuencia,
+  mergeSecuenciaFilterSpecs,
+  resolveCsvSecuenciaFilterSpecForPair,
+} from '../../utils/chequesSecuenciaFilter'
+import type { ChequesBundle } from '../../types/cheques'
 import type { NormalizedPayroll, PayrollItem } from '../../types/payroll'
 import type { AppError } from '../../types/errors'
 import { mapLimit } from '../../utils/promise'
@@ -23,6 +31,13 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       if (!/^\d{11}$/.test(cleaned)) return null
       // CUIL (11) -> DNI (8): quitamos primeros 2 y último
       return cleaned.slice(2, 10)
+    }
+    const normalizeRequestedId = (raw: string): string | null => {
+      const cleaned = normalizeCuil(raw)
+      if (!/^\d+$/.test(cleaned)) return null
+      if (cleaned.length === 11) return deriveDniFromCuil(cleaned)
+      if (cleaned.length === 8) return cleaned
+      return null
     }
 
     // CSV obligatorio solo para modo "lote".
@@ -66,19 +81,29 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    if (effective.periodos.length === 0) {
-      dispatch({
-        type: 'FETCH_ERROR',
-        payload: validationError('Seleccioná al menos un período (YYYY-MM)'),
-      })
-      return
-    }
+    const useManualPeriods = state.queryMode !== 'batch' || state.batchUseManualPeriods
+    const csvRows = state.queryMode === 'batch' ? state.csvSources.flatMap((s) => s.rows) : []
+    if (useManualPeriods) {
+      if (effective.periodos.length === 0) {
+        dispatch({
+          type: 'FETCH_ERROR',
+          payload: validationError('Seleccioná al menos un período (YYYY-MM)'),
+        })
+        return
+      }
 
-    const hasFuture = effective.periodos.some((p) => isFuturePeriod(p, max))
-    if (hasFuture) {
+      const hasFuture = effective.periodos.some((p) => isFuturePeriod(p, max))
+      if (hasFuture) {
+        dispatch({
+          type: 'FETCH_ERROR',
+          payload: validationError(`No se permiten períodos futuros (máximo ${max})`),
+        })
+        return
+      }
+    } else if (csvRows.length === 0) {
       dispatch({
         type: 'FETCH_ERROR',
-        payload: validationError(`No se permiten períodos futuros (máximo ${max})`),
+        payload: validationError('El CSV no contiene filas válidas con rango de períodos para consultar.'),
       })
       return
     }
@@ -137,7 +162,17 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       // usando el primer período seleccionado como "probe".
       const invalidIds = new Set<string>() // ids (DNI) para los que detectamos mismatch y no consultamos más
       const mismatchReported = new Set<string>()
-      const probePeriodo = effective.periodos[0] ?? ''
+      const forbiddenReported = new Set<string>()
+      const probePeriodo =
+        useManualPeriods
+          ? effective.periodos[0] ?? ''
+          : (() => {
+              for (const row of csvRows) {
+                const range = expandYYYYMMRange(row.periodoDesde, row.periodoHasta)
+                if (range.length > 0) return range[0]
+              }
+              return ''
+            })()
       const probePeriodoYYYYMM = probePeriodo.replace('-', '')
 
       const idsToValidate = uniqueRequestedIds.filter((id) => expectedCuilsByRequestedId.has(id))
@@ -153,7 +188,26 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           if (!expectedSet || expectedSet.size === 0) return null
           const expectedList = Array.from(expectedSet).sort()
 
-          const { rows } = await fetchLiquidacionPorSecuencia(id, probePeriodoYYYYMM)
+          const { rows, errors } = await fetchLiquidacionPorSecuencia(id, probePeriodoYYYYMM)
+          const hasForbiddenInProbe =
+            errors.some((m) => {
+              const mm = m.toLowerCase()
+              return (
+                mm.includes('forbidden') ||
+                mm.includes('http 403') ||
+                mm.includes('status code 403') ||
+                mm.includes('403')
+              )
+            }) && !forbiddenReported.has(id)
+
+          if (hasForbiddenInProbe) {
+            forbiddenReported.add(id)
+            registerError(
+              id,
+              probePeriodo,
+              `Acceso denegado al validar el DNI ${id}. Es posible que no tengas permisos para consultar esta información (por ejemplo, VPN requerida).`,
+            )
+          }
           const returnedRaw = extractCuilFromLiquidacion(rows)
           const returned = returnedRaw ? normalizeCuil(returnedRaw) : null
 
@@ -198,19 +252,62 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
       const validatedRequestedIds = uniqueRequestedIds.filter((id) => !invalidIds.has(id))
 
-      // 1) A partir de los CUILs y períodos efectivos armamos todos los pares (doc + período YYYYMM)
+      // 1) A partir de los CUILs y períodos efectivos armamos todos los pares (doc + período YYYYMM).
+      //    En CSV, secuencia 000 = todas; cualquier otro código de 3 dígitos filtra liquidación/liquidos.
       const pairKeys = new Set<string>()
-      const pairs = validatedRequestedIds
-        .flatMap((id) =>
-          effective.periodos.map((p) => {
-            const periodoYYYYMM = p.replace('-', '')
-            const key = `${id}-${periodoYYYYMM}`
-            if (pairKeys.has(key)) return null
-            pairKeys.add(key)
-            return { id, periodoYYYYMM }
-          }),
-        )
-        .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
+      const validatedSet = new Set(validatedRequestedIds)
+      const secuenciaFilterByKey = new Map<string, SecuenciaFilterSpec>()
+
+      const pairs =
+        state.queryMode !== 'batch'
+          ? validatedRequestedIds
+              .flatMap((id) =>
+                effective.periodos.map((p) => {
+                  const periodoYYYYMM = p.replace('-', '')
+                  const key = `${id}-${periodoYYYYMM}`
+                  if (pairKeys.has(key)) return null
+                  pairKeys.add(key)
+                  secuenciaFilterByKey.set(key, { mode: 'all' })
+                  return { id, periodoYYYYMM }
+                }),
+              )
+              .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
+          : useManualPeriods
+            ? validatedRequestedIds
+                .flatMap((id) =>
+                  effective.periodos.map((p) => {
+                    const periodoYYYYMM = p.replace('-', '')
+                    const key = `${id}-${periodoYYYYMM}`
+                    if (pairKeys.has(key)) return null
+                    pairKeys.add(key)
+                    secuenciaFilterByKey.set(
+                      key,
+                      resolveCsvSecuenciaFilterSpecForPair(id, periodoYYYYMM, csvRows, normalizeRequestedId),
+                    )
+                    return { id, periodoYYYYMM }
+                  }),
+                )
+                .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
+            : csvRows
+                .flatMap((row) => {
+                  const id = normalizeRequestedId(row.documento)
+                  if (!id || !validatedSet.has(id)) return []
+                  const periods = expandYYYYMMRange(row.periodoDesde, row.periodoHasta)
+                  const part = filterSpecFromCsvSecuencia(row.secuencia)
+                  return periods.map((periodo) => {
+                    const periodoYYYYMM = periodo.replace('-', '')
+                    const key = `${id}-${periodoYYYYMM}`
+                    if (pairKeys.has(key)) {
+                      const prev = secuenciaFilterByKey.get(key) ?? { mode: 'all' }
+                      secuenciaFilterByKey.set(key, mergeSecuenciaFilterSpecs(prev, part))
+                      return null
+                    }
+                    pairKeys.add(key)
+                    secuenciaFilterByKey.set(key, part)
+                    return { id, periodoYYYYMM }
+                  })
+                })
+                .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
 
       dispatch({
         type: 'SET_FETCH_PROGRESS',
@@ -218,7 +315,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       })
 
       // 2) Consultamos los 3 endpoints de cheques para cada par.
-      const chequesMap =
+      const chequesMapRaw =
         pairs.length > 0
           ? await fetchChequesForPairs(pairs, {
               concurrency: 6,
@@ -230,6 +327,12 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               },
             })
           : {}
+
+      const chequesMap: Record<string, ChequesBundle> = {}
+      for (const [key, bundle] of Object.entries(chequesMapRaw)) {
+        const filt = secuenciaFilterByKey.get(key) ?? { mode: 'all' }
+        chequesMap[key] = filterChequesBundleBySecuencia(bundle, filt)
+      }
 
       Object.values(chequesMap).forEach((bundle) => {
         const periodo = `${bundle.periodoYYYYMM.slice(0, 4)}-${bundle.periodoYYYYMM.slice(4, 6)}`
@@ -283,12 +386,41 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           registerError(
             bundle.id,
             periodo,
-            `No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.`,
+            `No se detectaron pagos para el período ${periodo}. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.`,
           )
         }
 
         if (bundle.errors && bundle.errors.length > 0) {
+          const hasForbidden = bundle.errors.some((m) => {
+            const mm = m.toLowerCase()
+            return (
+              mm.includes('forbidden') ||
+              mm.includes('http 403') ||
+              mm.includes('status code 403') ||
+              mm.includes('403')
+            )
+          })
+          if (hasForbidden && !forbiddenReported.has(bundle.id)) {
+            forbiddenReported.add(bundle.id)
+            registerError(
+              bundle.id,
+              periodo,
+              `Acceso denegado (Forbidden/403) al consultar el DNI ${bundle.id}. Es posible que no tengas permisos para ver esta información (por ejemplo, VPN requerida).`,
+            )
+          }
           bundle.errors.forEach((msg) => {
+            // Si ya detectamos 403, evitamos repetir el mensaje técnico "de siempre" en el resumen.
+            if (hasForbidden) {
+              const mm = msg.toLowerCase()
+              if (
+                mm.includes('forbidden') ||
+                mm.includes('http 403') ||
+                mm.includes('status code 403') ||
+                mm.includes('403')
+              ) {
+                return
+              }
+            }
             registerError(bundle.id, periodo, msg)
           })
         }
@@ -311,6 +443,16 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
         const errorCount = errorPeriods?.size ?? 0
 
         if (totalCount > 0 && errorCount === totalCount) {
+          // Si el documento falló en todos los períodos, priorizamos la causa "Forbidden/403"
+          // para no mostrar el genérico cuando el problema es de permisos/acceso.
+          if (forbiddenReported.has(cuil)) {
+            finalErrors.push({
+              cuil,
+              message:
+                'Acceso denegado (Forbidden/403). Es posible que no tengas permisos para ver esta información (por ejemplo, VPN requerida).',
+            })
+            return
+          }
           finalErrors.push({
             cuil,
             message:
@@ -340,12 +482,14 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
   }, [
     state.cuils,
     state.periodos,
+    state.batchUseManualPeriods,
     state.queryMode,
     state.manualCuil,
     state.manualMonth,
     state.manualFrom,
     state.manualTo,
     state.availablePeriodos,
+    state.csvSources,
     state.chequesByKey,
   ])
 

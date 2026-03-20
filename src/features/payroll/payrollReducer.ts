@@ -1,13 +1,14 @@
 import type { AppError } from '../../types/errors'
 import type { GroupMode, NormalizedPayroll } from '../../types/payroll'
 import type { ChequesBundle } from '../../types/cheques'
-import type { ParseCuilReport } from '../../utils/txtParser'
+import type { ParseCuilReport, ParseSercopeRow } from '../../utils/txtParser'
 
 export type QueryMode = 'batch' | 'manual'
 
 export interface CsvSource {
   name: string
   documentos: string[]
+  rows: ParseSercopeRow[]
   periodos: string[]
   report: ParseCuilReport | null
 }
@@ -18,6 +19,8 @@ export interface PayrollState {
   availablePeriodos: string[]
   /** Períodos seleccionados para consultar (filtro). */
   periodos: string[]
+  /** En lote: true usa periodos manuales; false usa rango por fila del CSV. */
+  batchUseManualPeriods: boolean
   /** Modo de consulta luego de cargar el CSV. */
   queryMode: QueryMode
   /** Entrada manual: un único CUIL/DNI (solo dígitos, sin guiones). */
@@ -43,6 +46,7 @@ export type PayrollAction =
   | { type: 'SET_CUILS'; payload: { cuils: string[]; report: ParseCuilReport | null } }
   | { type: 'SET_AVAILABLE_PERIODOS'; payload: string[] }
   | { type: 'SET_PERIODOS'; payload: string[] }
+  | { type: 'SET_BATCH_USE_MANUAL_PERIODS'; payload: boolean }
   | { type: 'SET_QUERY_MODE'; payload: QueryMode }
   | { type: 'SET_MANUAL_CUIL'; payload: string }
   | { type: 'SET_MANUAL_MONTH'; payload: string }
@@ -61,6 +65,7 @@ export const initialPayrollState: PayrollState = {
   cuils: [],
   availablePeriodos: [],
   periodos: [],
+  batchUseManualPeriods: false,
   queryMode: 'batch',
   manualCuil: '',
   manualMonth: '',
@@ -153,6 +158,8 @@ export function payrollReducer(state: PayrollState, action: PayrollAction): Payr
     }
     case 'SET_PERIODOS':
       return { ...state, periodos: action.payload, data: null, dataStale: false }
+    case 'SET_BATCH_USE_MANUAL_PERIODS':
+      return { ...state, batchUseManualPeriods: action.payload, data: null, dataStale: false, error: null }
     case 'SET_QUERY_MODE':
       return { ...state, queryMode: action.payload, data: null, dataStale: false, error: null }
     case 'SET_MANUAL_CUIL':
