@@ -30,6 +30,11 @@ export interface LiquidacionPorSecuenciaItem {
   nombreEstab: string | null
   secu: string | null
   rev: string | null
+  /** Código de establecimiento tal como viene del servicio (ej. 0097MT0006). */
+  estabPag: string | null
+  distritoInt: string | null
+  ccticas: string | null
+  nomDistInt: string | null
 
   // Características
   cat: string | null

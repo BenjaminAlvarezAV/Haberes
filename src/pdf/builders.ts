@@ -43,6 +43,47 @@ function formatEstablecimientoRow(it: LiquidPorEstablecimientoItem): string {
   return `${d} ${org} ${num}`.trim()
 }
 
+/** C.horaria del JSON (hs): mismo criterio que el recibo en papel. */
+function formatHsDisplay(value: string | null | undefined): string {
+  if (value == null || !String(value).trim()) return '—'
+  const n = parseFloat(String(value).replace(',', '.'))
+  if (Number.isNaN(n)) return String(value).trim()
+  return n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatDistritoTipoNumero(
+  distritoInt: string | null | undefined,
+  tipoOrg: string | null | undefined,
+  numero: string | null | undefined,
+): string {
+  const dRaw = String(distritoInt ?? '')
+    .replace(/\D/g, '')
+    .trim()
+  const t = String(tipoOrg ?? '').trim()
+  const nRaw = String(numero ?? '')
+    .replace(/\D/g, '')
+    .trim()
+  if (!dRaw && !t && !nRaw) return '—'
+  const d = dRaw ? String(parseInt(dRaw, 10)).padStart(3, '0') : '---'
+  const n = nRaw ? String(parseInt(nRaw, 10)).padStart(4, '0') : '----'
+  return `${d}-${t || '--'}-${n}`
+}
+
+function pickOrdenPagoPadded(opids: string[]): string {
+  const trimmed = opids.map((x) => x.trim()).filter((x) => x.length > 0)
+  if (trimmed.length === 0) return '—'
+  const nums = trimmed
+    .map((o) => parseInt(o, 10))
+    .filter((n) => !Number.isNaN(n))
+  if (nums.length > 0) {
+    const min = Math.min(...nums)
+    return String(min).padStart(5, '0')
+  }
+  return trimmed[0]
+}
+
+const RECEIPT_SECTION_HEADER_FILL = '#e5e7eb'
+
 function sumLiquid(rows: LiquidPorEstablecimientoItem[]): number {
   return rows.reduce((acc, r) => acc + (r.liquido ?? 0), 0)
 }
@@ -73,9 +114,11 @@ type SecuenciaGroup = {
   key: string
   meta: {
     estabCode: string
+    leftLine1: string
+    leftLine2: string
     nombreEstab: string
     categoria: string
-    desfavor: string
+    desfavorabilidad: string
     secciones: string
     esCarcel: string
     dobleEscol: string
@@ -87,9 +130,8 @@ type SecuenciaGroup = {
     apoyoReal: string
     cargoInt: string
     apoyoInt: string
-    periodoLiq: string
-    ordenPago: string
-    direccion: string
+    periodoLiqSix: string
+    ordenPagoPadded: string
     antiguedad: string
     inasistencias: string
   }
@@ -113,27 +155,35 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
     const key = [estabCode, secu, rev, periodoLiq, nombreEstab].join('|')
 
     if (!map.has(key)) {
+      const mesaRaw = String(it.mesaPago ?? it.fecAfec ?? '')
+        .replace(/\D/g, '')
+        .trim()
+      const periodoLiqSix =
+        mesaRaw.length >= 6 ? mesaRaw.slice(0, 6) : yyyymm(periodoLiq).replace(/\D/g, '').slice(0, 6)
+
+      const estabPagLine = (it.estabPag ?? '').trim()
       map.set(key, {
         key,
         meta: {
           estabCode,
+          leftLine1: estabPagLine || formatDistritoTipoNumero(it.distritoInt, tipoOrg, numero),
+          leftLine2: (it.ccticas ?? '').trim() || '—',
           nombreEstab: nombreEstab || '—',
-          categoria: it.cat ?? '—',
-          desfavor: yesNoFromFlag(it.rural),
-          secciones: it.secciones ?? '—',
+          categoria: (it.cat ?? '').trim() || '—',
+          desfavorabilidad: (it.rural ?? '').trim() || '—',
+          secciones: (it.secciones ?? '').trim() || '—',
           esCarcel: yesNoFromFlag(it.esCarcel),
           dobleEscol: yesNoFromFlag(it.dobEscolEstab),
-          turnos: it.turnos ?? '—',
+          turnos: (it.turnos ?? '').trim() || '—',
           secuencia: secu || '—',
           revista: rev || '—',
-          cargoReal: it.cargoReal ?? '—',
-          choraria: it.choraria ?? '—',
-          apoyoReal: it.apoyoReal ?? '—',
-          cargoInt: it.cargoInt ?? '—',
-          apoyoInt: it.apoyoInt ?? '—',
-          periodoLiq: mesPago(periodoLiq),
-          ordenPago: '—',
-          direccion: it.direccion ?? '—',
+          cargoReal: (it.cargoReal ?? '').trim() || '—',
+          choraria: formatHsDisplay(it.choraria),
+          apoyoReal: (it.apoyoReal ?? '').trim() || '',
+          cargoInt: (it.cargoInt ?? '').trim() || '',
+          apoyoInt: (it.apoyoInt ?? '').trim() || '',
+          periodoLiqSix: periodoLiqSix || yyyymm(fallbackPeriodo),
+          ordenPagoPadded: '—',
           antiguedad: (it.antig ?? '').trim() || '—',
           inasistencias: (it.inas ?? '').trim() || '0.00',
         },
@@ -154,7 +204,7 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
           .filter((x) => x.length > 0),
       ),
     )
-    g.meta.ordenPago = opids.length > 0 ? `ORDEN DE PAGO: ${opids.join(', ')}` : '—'
+    g.meta.ordenPagoPadded = pickOrdenPagoPadded(opids)
   }
 
   return out.sort((a, b) => {
@@ -199,6 +249,17 @@ const boxedLayoutRoomy = {
   paddingRight: () => 6,
   paddingTop: () => 4,
   paddingBottom: () => 4,
+}
+
+const boxedLayoutCaract = {
+  hLineWidth: () => 0.8,
+  vLineWidth: () => 0.8,
+  hLineColor: () => '#111827',
+  vLineColor: () => '#111827',
+  paddingLeft: () => 1.5,
+  paddingRight: () => 1.5,
+  paddingTop: () => 1,
+  paddingBottom: () => 1,
 }
 
 function sectionLabel(text: string): TableCell {
@@ -432,182 +493,172 @@ function buildReceiptPage({
   const secuenciaBlocks: Content[] =
     secuGroups.length > 0
       ? secuGroups.flatMap((g) => {
-          const caracteristicasBlock = boxedBlock(
-            {
-              stack: [
-                {
-                  text: `${String(g.meta.secuencia).padStart(4, '0')}  ${g.meta.estabCode}-${g.meta.revista}`,
-                  style: 'section',
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    widths: ['*'],
-                    body: [[cell('CARACTERISTICAS DEL ESTABLECIMIENTO', 'sectionBox', { fillColor: '#f9fafb' })]],
-                  },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    headerRows: 1,
-                    widths: [90, 58, 88, 55, 70, 45],
-                    body: [
-                      [
-                        cell('ESTABLEC.', 'thTiny'),
-                        cell('CATEGORIA', 'thTiny'),
-                        cell('DESFAVORABILIDAD', 'thTiny'),
-                        cell('SECCIONES', 'thTiny'),
-                        cell('ES CARCEL', 'thTiny'),
-                        cell('TURNOS', 'thTiny'),
-                      ],
-                      [
-                        cell(g.meta.estabCode, 'tdTiny'),
-                        cell(g.meta.categoria, 'tdTiny'),
-                        cell(g.meta.desfavor, 'tdTiny'),
-                        cell(g.meta.secciones, 'tdTiny'),
-                        cell(g.meta.esCarcel, 'tdTiny'),
-                        cell(g.meta.turnos, 'tdTiny'),
-                      ],
-                    ],
-                  },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    headerRows: 1,
-                    widths: [70, 80, 65, '*'],
-                    body: [
-                      [
-                        cell('DOBLE ESC.', 'thTiny'),
-                        cell('CARGO REAL', 'thTiny'),
-                        cell('C.HORARIA', 'thTiny'),
-                        cell('DIRECCIÓN', 'thTiny'),
-                      ],
-                      [
-                        cell(g.meta.dobleEscol, 'tdTiny'),
-                        cell(g.meta.cargoReal, 'tdTiny'),
-                        cell(g.meta.choraria, 'tdTiny'),
-                        cell(g.meta.direccion, 'tdTiny'),
-                      ],
-                    ],
-                  },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    headerRows: 1,
-                    widths: [150, '*', 70],
-                    body: [
-                      [
-                        cell('NOMBRE DEL ESTABLECIMIENTO', 'thTiny'),
-                        cell('ORDEN DE PAGO', 'thTiny'),
-                        cell('PERIODO', 'thTiny'),
-                      ],
-                      [cell(g.meta.nombreEstab, 'tdTiny'), cell(g.meta.ordenPago, 'tdTiny'), cell(g.meta.periodoLiq, 'tdTiny')],
-                    ],
-                  },
-                  layout: boxedLayout,
-                },
-                {
-                  text: `RURAL ARTICULACION: ${g.meta.desfavor}   DIAS TRABAJADOS: —   INASISTENCIAS: ${g.meta.inasistencias}   ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}`,
-                  style: 'tdTiny',
-                  margin: [0, 4, 0, 0],
-                },
-              ],
-            },
-            8,
-          )
+          const ordenLabel =
+            g.meta.ordenPagoPadded !== '—' ? `ORDEN DE PAGO: ${g.meta.ordenPagoPadded}` : 'ORDEN DE PAGO: —'
 
-          const secuenciaBlock = boxedBlock(
-            {
-              stack: [
-                {
-                  table: {
-                    widths: ['*'],
-                    body: [[cell('SECUENCIA / DATOS DEL CARGO', 'sectionBox', { fillColor: '#f9fafb' })]],
-                  },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    headerRows: 1,
-                    widths: [70, 70, '*', 70],
-                    body: [
-                      [
-                        cell('SECUENCIA', 'thTiny'),
-                        cell('REVISTA', 'thTiny'),
-                        cell('CARGO REAL', 'thTiny'),
-                        cell('C.HORARIA', 'thTiny'),
-                      ],
-                      [
-                        cell(g.meta.secuencia, 'tdTiny'),
-                        cell(g.meta.revista, 'tdTiny'),
-                        cell(g.meta.cargoReal, 'tdTiny'),
-                        cell(g.meta.choraria, 'tdTiny'),
-                      ],
+          const caracteristicasYsecuenciaTop = {
+            table: {
+              widths: [50, '*', 96],
+              body: [
+                [
+                  {
+                    stack: [
+                      { text: g.meta.leftLine1, style: 'tdTiny', alignment: 'center' },
+                      { text: g.meta.leftLine2, style: 'tdTiny', alignment: 'center', margin: [0, 2, 0, 0] },
                     ],
+                    margin: [1, 3, 1, 3],
                   },
-                  layout: boxedLayout,
-                  margin: [0, 0, 0, 4],
-                },
-                {
-                  table: {
-                    headerRows: 1,
-                    widths: ['*', '*', '*'],
-                    body: [
-                      [
-                        cell('APOYO REAL', 'thTiny'),
-                        cell('CARGO INT.', 'thTiny'),
-                        cell('APOYO INT.', 'thTiny'),
+                  {
+                    table: {
+                      widths: ['*', '*', '*', '*', '*', '*'],
+                      body: [
+                        [
+                          {
+                            text: 'CARACTERISTICAS DEL ESTABLECIMIENTO',
+                            style: 'sectionBoxCaract',
+                            colSpan: 6,
+                            alignment: 'center',
+                            fillColor: RECEIPT_SECTION_HEADER_FILL,
+                          },
+                          {},
+                          {},
+                          {},
+                          {},
+                          {},
+                        ],
+                        [
+                          cell('CAT.', 'thCaract', { alignment: 'center' }),
+                          cell('DESFAV.', 'thCaract', { alignment: 'center' }),
+                          cell('SECC.', 'thCaract', { alignment: 'center' }),
+                          cell('E.CARCEL', 'thCaract', { alignment: 'center' }),
+                          cell('DBL ESC.', 'thCaract', { alignment: 'center' }),
+                          cell('TUR.', 'thCaract', { alignment: 'center' }),
+                        ],
+                        [
+                          cell(g.meta.categoria, 'tdCaract', { alignment: 'center' }),
+                          cell(g.meta.desfavorabilidad, 'tdCaract', { alignment: 'center' }),
+                          cell(g.meta.secciones, 'tdCaract', { alignment: 'center' }),
+                          cell(g.meta.esCarcel, 'tdCaract', { alignment: 'center' }),
+                          cell(g.meta.dobleEscol, 'tdCaract', { alignment: 'center' }),
+                          cell(g.meta.turnos, 'tdCaract', { alignment: 'center' }),
+                        ],
                       ],
-                      [
-                        cell(g.meta.apoyoReal, 'tdTiny'),
-                        cell(g.meta.cargoInt, 'tdTiny'),
-                        cell(g.meta.apoyoInt, 'tdTiny'),
-                      ],
-                    ],
+                    },
+                    layout: boxedLayoutCaract,
                   },
-                  layout: boxedLayout,
-                },
-              ],
-            },
-            8,
-          )
-
-          const conceptosBlock = boxedBlock(
-            {
-              table: {
-                headerRows: 1,
-                widths: [55, '*', 80, 80],
-                body: [
-                  [
-                    cell('COD', 'thSmall'),
-                    cell('HABERES', 'thSmall'),
-                    cell('Haberes', 'thSmall', { alignment: 'right' }),
-                    cell('Descuentos', 'thSmall', { alignment: 'right' }),
-                  ],
-                  ...groupCodes(g.items).map((c) => [
-                    cell(c.codigo || '', 'td'),
-                    cell(c.desc, 'td'),
-                    cell(c.amount >= 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
-                    cell(c.amount < 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
-                  ]),
+                  {
+                    table: {
+                      widths: ['*'],
+                      body: [
+                        [
+                          {
+                            text: 'NOMBRE DEL ESTABLECIMIENTO',
+                            style: 'thCaract',
+                            alignment: 'center',
+                            fillColor: RECEIPT_SECTION_HEADER_FILL,
+                          },
+                        ],
+                        [cell(g.meta.nombreEstab, 'tdCaract')],
+                      ],
+                    },
+                    layout: boxedLayoutCaract,
+                  },
                 ],
-              },
-              layout: boxedLayout,
+              ],
             },
-            10,
-          )
+            layout: boxedLayout,
+            margin: [0, 0, 0, 6],
+          }
+
+          const filaSecuenciaLiquidacion = {
+            table: {
+              widths: [38, 36, 48, 40, 44, 44, 44, 52, '*'],
+              body: [
+                [
+                  cell('SECUENCIA', 'thTiny'),
+                  cell('REVISTA', 'thTiny'),
+                  cell('CARGO REAL', 'thTiny'),
+                  cell('C.HORARIA', 'thTiny'),
+                  cell('APOYO REAL', 'thTiny'),
+                  cell('CARGO INT.', 'thTiny'),
+                  cell('APOYO INT.', 'thTiny'),
+                  cell('PERIODO LIQ.', 'thTiny'),
+                  cell('ORDEN DE PAGO', 'thTiny', { alignment: 'right' }),
+                ],
+                [
+                  cell(g.meta.secuencia, 'tdTiny'),
+                  cell(g.meta.revista, 'tdTiny'),
+                  cell(g.meta.cargoReal, 'tdTiny'),
+                  cell(g.meta.choraria, 'tdTiny'),
+                  cell(g.meta.apoyoReal, 'tdTiny'),
+                  cell(g.meta.cargoInt, 'tdTiny'),
+                  cell(g.meta.apoyoInt, 'tdTiny'),
+                  cell(g.meta.periodoLiqSix, 'tdTiny'),
+                  cell(ordenLabel, 'tdTiny', { alignment: 'right' }),
+                ],
+              ],
+            },
+            layout: boxedLayout,
+            margin: [0, 0, 0, 8],
+          }
+
+          const conceptosInner = {
+            stack: [
+              {
+                table: {
+                  headerRows: 2,
+                  widths: [48, '*', 72, 72],
+                  body: [
+                    [
+                      {
+                        text: 'HABERES',
+                        style: 'sectionBox',
+                        colSpan: 4,
+                        alignment: 'center',
+                        fillColor: RECEIPT_SECTION_HEADER_FILL,
+                      },
+                      {},
+                      {},
+                      {},
+                    ],
+                    [
+                      cell('COD', 'thSmall'),
+                      cell('HABERES', 'thSmall'),
+                      cell('Haberes', 'thSmall', { alignment: 'right' }),
+                      cell('Descuentos', 'thSmall', { alignment: 'right' }),
+                    ],
+                    ...groupCodes(g.items).map((c) => [
+                      cell(c.codigo || '', 'td'),
+                      cell((c.desc ?? '').trim(), 'td'),
+                      cell(c.amount >= 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
+                      cell(c.amount < 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
+                    ]),
+                  ],
+                },
+                layout: {
+                  ...boxedLayout,
+                  vLineStyle: (i: number) => (i === 3 ? 'dashed' : 'solid'),
+                },
+              },
+              {
+                text: `ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}     RURAL ARTICULACION: ${g.meta.desfavorabilidad}     DIAS TRABAJADOS: —     INASISTENCIAS: ${g.meta.inasistencias}`,
+                style: 'tdTiny',
+                margin: [0, 6, 0, 0],
+              },
+            ],
+          } as unknown as Content
+
+          const conceptosBlock = boxedBlock(conceptosInner, 10)
 
           return [
             {
-              // Permite corte entre páginas para evitar "página 1 en blanco".
-              stack: [caracteristicasBlock, secuenciaBlock, conceptosBlock],
-            },
+              stack: [
+                caracteristicasYsecuenciaTop as unknown as Content,
+                filaSecuenciaLiquidacion as unknown as Content,
+                conceptosBlock,
+              ],
+              unbreakable: true,
+            } as Content,
           ]
         })
       : [
@@ -824,11 +875,14 @@ function receiptDoc(content: Content[]): TDocumentDefinitions {
       header: { fontSize: 10.5, bold: true, lineHeight: 1.12 },
       section: { fontSize: 9, bold: true },
       sectionBox: { fontSize: 8.2, bold: true, color: '#111827' },
+      sectionBoxCaract: { fontSize: 5.9, bold: true, color: '#111827', lineHeight: 1.05 },
       thSmall: { fontSize: 7.5, bold: true, color: '#111827' },
       thTiny: { fontSize: 7.1, bold: true, color: '#111827' },
+      thCaract: { fontSize: 5.7, bold: true, color: '#111827' },
       thData: { fontSize: 8.2, bold: true, color: '#111827' },
       td: { fontSize: 8, color: '#111827' },
       tdTiny: { fontSize: 7.4, color: '#111827' },
+      tdCaract: { fontSize: 5.6, color: '#111827' },
       tdData: { fontSize: 8.6, color: '#111827' },
       legal: { fontSize: 7.8, color: '#111827', lineHeight: 1.15 },
       legalInline: { fontSize: 7.2, color: '#111827', lineHeight: 1.15 },
