@@ -110,6 +110,18 @@ function yesNoFromFlag(value: string | null): string {
   return value
 }
 
+const separatorOnlyRowLayout = {
+  // En una tabla de 2 filas, hay 3 líneas horizontales (top, middle, bottom).
+  // Dibujamos solo la del medio para separar las dos líneas de texto.
+  hLineWidth: (i: number) => (i === 1 ? 0.8 : 0),
+  vLineWidth: () => 0,
+  paddingLeft: () => 0,
+  paddingRight: () => 0,
+  paddingTop: () => 0,
+  paddingBottom: () => 0,
+  hLineColor: () => '#111827',
+}
+
 type SecuenciaGroup = {
   key: string
   meta: {
@@ -138,8 +150,47 @@ type SecuenciaGroup = {
   items: LiquidacionPorSecuenciaItem[]
 }
 
-function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo: string): SecuenciaGroup[] {
+function normalizeDigits(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\D/g, '')
+    .trim()
+}
+
+function padLeftDigits(value: unknown, len: number, emptyFallback: string): string {
+  const d = normalizeDigits(value)
+  if (!d) return emptyFallback
+  return d.padStart(len, '0')
+}
+
+function normalizeOrg(value: unknown): string {
+  return String(value ?? '').trim()
+}
+
+function estabKey(tipoOrg: unknown, numero: unknown): string {
+  const org = normalizeOrg(tipoOrg).toUpperCase()
+  const num = normalizeDigits(numero).replace(/^0+(?=\d)/, '') // sin ceros a la izquierda para matchear robusto
+  return `${org}|${num || ''}`
+}
+
+function buildEstabIndex(rows: LiquidPorEstablecimientoItem[]): Map<string, LiquidPorEstablecimientoItem> {
+  const map = new Map<string, LiquidPorEstablecimientoItem>()
+  for (const r of rows) {
+    const key = estabKey(r.tipoOrg, r.numero)
+    if (!key) continue
+    const prev = map.get(key)
+    // Preferimos la fila que tenga distrito informado.
+    if (!prev || (prev.distrito == null && r.distrito != null)) map.set(key, r)
+  }
+  return map
+}
+
+function groupBySecuencia(
+  items: LiquidacionPorSecuenciaItem[],
+  fallbackPeriodo: string,
+  estabRows: LiquidPorEstablecimientoItem[] = [],
+): SecuenciaGroup[] {
   const map = new Map<string, SecuenciaGroup>()
+  const estabIndex = buildEstabIndex(estabRows)
 
   for (const it of items) {
     const tipoOrg = (it.tipoOrg ?? '').trim()
@@ -155,19 +206,42 @@ function groupBySecuencia(items: LiquidacionPorSecuenciaItem[], fallbackPeriodo:
     const key = [estabCode, secu, rev, periodoLiq, nombreEstab].join('|')
 
     if (!map.has(key)) {
+      const estab = estabIndex.get(estabKey(tipoOrg, numero))
+      // Requerimiento: cuando venga null/vacío, mostrar '-' (un solo guion).
+      const distrito3 = padLeftDigits(estab?.distrito ?? it.distritoInt, 3, '-')
+      const nomDist = String(it.nomDistInt ?? '').trim() || '-'
+      const orgForLine2 = (normalizeOrg(estab?.tipoOrg ?? tipoOrg) || '-').toUpperCase()
+      const numero4 = padLeftDigits(estab?.numero ?? numero, 4, '-')
+
+      const leftLine1 = (() => {
+        const parts = [distrito3, nomDist].filter((p) => p !== '-')
+        return parts.length ? parts.join(' ') : '-'
+      })()
+
+      const leftLine2 = (() => {
+        const orgOk = orgForLine2 !== '-'
+        const numOk = numero4 !== '-'
+        if (orgOk && numOk) return `${orgForLine2}-${numero4}`
+        if (orgOk) return orgForLine2
+        if (numOk) return numero4
+        return '-'
+      })()
+
       const mesaRaw = String(it.mesaPago ?? it.fecAfec ?? '')
         .replace(/\D/g, '')
         .trim()
       const periodoLiqSix =
         mesaRaw.length >= 6 ? mesaRaw.slice(0, 6) : yyyymm(periodoLiq).replace(/\D/g, '').slice(0, 6)
 
-      const estabPagLine = (it.estabPag ?? '').trim()
       map.set(key, {
         key,
         meta: {
           estabCode,
-          leftLine1: estabPagLine || formatDistritoTipoNumero(it.distritoInt, tipoOrg, numero),
-          leftLine2: (it.ccticas ?? '').trim() || '—',
+          // Requerimiento:
+          // - Arriba: distrito (3 dígitos, desde liquidPorEstablecimiento) - nomDistInt (desde liquidacionPorSecuencia)
+          // - Abajo: tipoOrg + número (4 dígitos, desde liquidPorEstablecimiento)
+          leftLine1,
+          leftLine2,
           nombreEstab: nombreEstab || '—',
           categoria: (it.cat ?? '').trim() || '—',
           desfavorabilidad: (it.rural ?? '').trim() || '—',
@@ -232,15 +306,18 @@ function cell(text: string, style?: string, extra?: Partial<TableCell>): TableCe
   return { text, style, ...(extra ?? {}) } as unknown as TableCell
 }
 
+const BOXED_CELL_PADDING_X = 4
+const BOXED_CELL_PADDING_Y = 2.5
+
 const boxedLayout = {
   hLineWidth: () => 0.8,
   vLineWidth: () => 0.8,
   hLineColor: () => '#111827',
   vLineColor: () => '#111827',
-  paddingLeft: () => 4,
-  paddingRight: () => 4,
-  paddingTop: () => 2.5,
-  paddingBottom: () => 2.5,
+  paddingLeft: () => BOXED_CELL_PADDING_X,
+  paddingRight: () => BOXED_CELL_PADDING_X,
+  paddingTop: () => BOXED_CELL_PADDING_Y,
+  paddingBottom: () => BOXED_CELL_PADDING_Y,
 }
 
 const boxedLayoutRoomy = {
@@ -260,6 +337,14 @@ const boxedLayoutCaract = {
   paddingRight: () => 1.5,
   paddingTop: () => 1,
   paddingBottom: () => 1,
+}
+
+// Layout específico para "Nombre del establecimiento":
+// agregamos altura interna sin “partir” el cuadro con una línea horizontal visible.
+// En una tabla de 3 filas, ocultamos la línea entre la fila 2 y 3 (i === 2).
+const boxedLayoutCaractName = {
+  ...boxedLayoutCaract,
+  hLineWidth: (i: number) => (i === 2 ? 0 : 0.8),
 }
 
 function sectionLabel(text: string): TableCell {
@@ -384,7 +469,7 @@ function buildReceiptPage({
 
   const secuGroups: SecuenciaGroup[] =
     cheques?.liquidacionPorSecuencia?.length
-      ? groupBySecuencia(cheques.liquidacionPorSecuencia, periodo)
+      ? groupBySecuencia(cheques.liquidacionPorSecuencia, periodo, cheques?.liquidPorEstablecimiento ?? [])
       : []
 
   const head = secuGroups[0]?.items?.[0] ?? cheques?.liquidacionPorSecuencia?.[0]
@@ -493,8 +578,8 @@ function buildReceiptPage({
   const secuenciaBlocks: Content[] =
     secuGroups.length > 0
       ? secuGroups.flatMap((g) => {
-          const ordenLabel =
-            g.meta.ordenPagoPadded !== '—' ? `ORDEN DE PAGO: ${g.meta.ordenPagoPadded}` : 'ORDEN DE PAGO: —'
+          // El encabezado de la columna ya dice "ORDEN DE PAGO"; acá mostramos sólo el valor.
+          const ordenLabel = g.meta.ordenPagoPadded !== '—' ? g.meta.ordenPagoPadded : '—'
 
           const caracteristicasYsecuenciaTop = {
             table: {
@@ -502,11 +587,30 @@ function buildReceiptPage({
               body: [
                 [
                   {
-                    stack: [
-                      { text: g.meta.leftLine1, style: 'tdTiny', alignment: 'center' },
-                      { text: g.meta.leftLine2, style: 'tdTiny', alignment: 'center', margin: [0, 2, 0, 0] },
-                    ],
-                    margin: [1, 3, 1, 3],
+                    table: {
+                      widths: ['*'],
+                      body: [
+                        [
+                          {
+                            text: g.meta.leftLine1,
+                            style: 'tdTiny',
+                            alignment: 'center',
+                            margin: [0, 3, 0, 2],
+                          },
+                        ],
+                        [
+                          {
+                            text: g.meta.leftLine2,
+                            style: 'tdTiny',
+                            alignment: 'center',
+                            margin: [0, 2, 0, 3],
+                          },
+                        ],
+                      ],
+                    },
+                    layout: separatorOnlyRowLayout,
+                    // Compensa el padding del layout externo para que la línea separadora llegue de borde a borde.
+                    margin: [-BOXED_CELL_PADDING_X, 0, -BOXED_CELL_PADDING_X, 0],
                   },
                   {
                     table: {
@@ -553,15 +657,17 @@ function buildReceiptPage({
                         [
                           {
                             text: 'NOMBRE DEL ESTABLECIMIENTO',
-                            style: 'thCaract',
+                            style: 'sectionBoxCaract',
                             alignment: 'center',
                             fillColor: RECEIPT_SECTION_HEADER_FILL,
                           },
                         ],
-                        [cell(g.meta.nombreEstab, 'tdCaract')],
+                        [cell(g.meta.nombreEstab, 'tdCaract', { margin: [0, 2, 0, 0] })],
+                        // Spacer interno para igualar altura con el bloque de características (sin línea visible).
+                        [cell('\u00A0', 'thCaract')],
                       ],
                     },
-                    layout: boxedLayoutCaract,
+                    layout: boxedLayoutCaractName,
                   },
                 ],
               ],
