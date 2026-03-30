@@ -18,9 +18,11 @@ export interface CuilUploaderProps {
   onParsed: (payload: SercopeUploadPayload) => void
   sources?: { name: string; documentos: number; periodos: number }[]
   onRemoveSource?: (index: number) => void
+  /** Si es true, no se puede cargar otro CSV (p. ej. modo manual). Los ya cargados siguen listados. */
+  disabled?: boolean
 }
 
-export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploaderProps) {
+export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = false }: CuilUploaderProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [report, setReport] = useState<ParseCuilReport | null>(null)
@@ -39,6 +41,7 @@ export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploader
 
   const handleFile = useCallback(
     async (file: File) => {
+      if (disabled) return
       if (!file.name.toLowerCase().endsWith('.csv')) {
         setError('Solo se permiten archivos .csv')
         return
@@ -78,73 +81,104 @@ export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploader
         setParseProgress(null)
       }
     },
-    [onParsed],
+    [disabled, onParsed],
   )
 
   const onDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
+      if (disabled) return
       const file = e.dataTransfer.files?.[0]
       if (file) void handleFile(file)
     },
-    [handleFile],
+    [disabled, handleFile],
   )
 
-  const onPick = useCallback(() => inputRef.current?.click(), [])
+  const onPick = useCallback(() => {
+    if (disabled) return
+    inputRef.current?.click()
+  }, [disabled])
 
   const onChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (disabled) {
+        e.target.value = ''
+        return
+      }
       const file = e.target.files?.[0]
       if (file) void handleFile(file)
       e.target.value = ''
     },
-    [handleFile],
+    [disabled, handleFile],
   )
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <label className="block text-sm font-medium text-gray-900">Archivo Sercope (CSV)</label>
-          <p className="text-xs text-gray-600">
-            Columnas: Documento (DNI 8 o CUIL 11), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM),
-            Secuencia (000). No se permiten períodos futuros.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onPick}
-          className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 hover:bg-gray-50"
-        >
-          Seleccionar archivo
-        </button>
-      </div>
-
       <div
-        className="rounded-lg border-2 border-dashed border-gray-300 bg-white px-6 py-10 text-center transition-colors hover:border-blue-400"
+        className={`space-y-3 ${
+          disabled
+            ? 'pointer-events-none select-none rounded-lg border border-gray-200 bg-gray-100 p-3 opacity-60 saturate-0'
+            : ''
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <label
+              className={`block text-sm font-medium ${disabled ? 'text-gray-500' : 'text-gray-900'}`}
+            >
+              Archivo Sercope (CSV)
+            </label>
+            <p className={`text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+              Columnas: Documento (DNI 8 o CUIL 11), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM),
+              Secuencia (000). No se permiten períodos futuros.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onPick}
+            disabled={disabled}
+            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-200 disabled:text-gray-500"
+          >
+            Seleccionar archivo
+          </button>
+        </div>
+
+        <div
+          className={`rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors ${
+            disabled
+              ? 'cursor-not-allowed border-gray-300/80 bg-gray-200/50'
+              : 'border-gray-300 bg-white hover:border-blue-400'
+          }`}
         onDrop={onDrop}
         onDragOver={(e) => e.preventDefault()}
-        onClick={onPick}
-        role="button"
-        tabIndex={0}
+        onClick={disabled ? undefined : onPick}
+        role={disabled ? undefined : 'button'}
+        tabIndex={disabled ? -1 : 0}
         onKeyDown={(e) => {
+          if (disabled) return
           if (e.key === 'Enter' || e.key === ' ') onPick()
         }}
-        aria-label="Zona de carga de CSV"
+        aria-disabled={disabled}
+        aria-label={disabled ? 'Carga de CSV no disponible' : 'Zona de carga de CSV'}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv"
-          className="hidden"
-          onChange={onChange}
-        />
-        <p className="text-sm font-medium text-gray-900">Arrastrá y soltá el CSV acá</p>
-        <p className="mt-1 text-xs text-gray-600">o hacé click para seleccionar</p>
-      </div>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            disabled={disabled}
+            onChange={onChange}
+          />
+          <p className={`text-sm font-medium ${disabled ? 'text-gray-500' : 'text-gray-900'}`}>
+            Arrastrá y soltá el CSV acá
+          </p>
+          <p className={`mt-1 text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+            o hacé click para seleccionar
+          </p>
+        </div>
 
-      {report ? (
-        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
+        {report ? (
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
           <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
             <div className="text-xs text-gray-600">Líneas</div>
             <div className="font-semibold text-gray-900">{report.totalLines}</div>
@@ -175,14 +209,15 @@ export function CuilUploader({ onParsed, sources, onRemoveSource }: CuilUploader
               </div>
             </div>
           ) : null}
-        </div>
-      ) : null}
+          </div>
+        ) : null}
 
-      {derivedPeriods.length > 0 ? (
-        <p className="text-xs text-gray-600">
-          Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
-        </p>
-      ) : null}
+        {derivedPeriods.length > 0 ? (
+          <p className={`text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+            Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
+          </p>
+        ) : null}
+      </div>
 
       {sources && sources.length > 0 ? (
         <div className="space-y-1 text-xs text-gray-700">

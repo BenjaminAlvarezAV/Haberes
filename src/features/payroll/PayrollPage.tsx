@@ -11,7 +11,7 @@ import { ResultsTable } from '../../components/results/ResultsTable'
 import { PdfPreviewModal } from '../../components/pdf/PdfPreviewModal'
 import { usePayroll } from '../../hooks/usePayroll'
 import { buildAgentPdfs, buildPeriodPdfs } from '../../pdf/builders'
-import type { AgentPdf, AgentPeriodPdf, PeriodPdf } from '../../pdf/builders'
+import type { AgentPeriodPdf, PeriodPdf } from '../../pdf/builders'
 import { createPdfBase64, downloadBlob } from '../../pdf/render'
 import { groupByAgent, groupByPeriod } from '../../utils/grouping'
 import type { GroupedByAgent, GroupedByPeriod } from '../../utils/grouping'
@@ -163,147 +163,125 @@ export function PayrollPage() {
     () => Object.values(chequesByKey).filter((bundle) => bundle.errors && bundle.errors.length > 0).length,
     [chequesByKey],
   )
-  const pdfs = groupMode === 'agent' ? agentPdfs : periodPdfs
-  const preview = pdfs[previewIndex] ?? null
-
-  // Navegación avanzada de vista previa (agente / período) solo aplica en modo por agente.
-  const currentAgent = useMemo(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return null
-    return preview.cuil
-  }, [preview, groupMode])
-
-  const currentPeriodForPreview = useMemo(() => {
-    if (!preview) return null
-    if ('periodo' in preview) return preview.periodo
-    return null
-  }, [preview])
+  // Vista previa: siempre misma lista que en modo por agente (1 PDF por agente × período),
+  // así la navegación Agente / Período y la búsqueda son iguales con cualquier agrupación en pantalla.
+  const previewPdfs = agentPdfs
+  const zipPdfCount = groupMode === 'agent' ? agentPdfs.length : periodPdfs.length
+  const preview = previewPdfs[previewIndex] ?? null
 
   const hasPrevPeriodInAgent = useMemo(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return false
+    if (!preview || !('cuil' in preview) || !('periodo' in preview)) return false
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
-      const p = pdfs[i]
+      const p = previewPdfs[i]
       if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) return true
     }
     return false
-  }, [pdfs, preview, previewIndex, groupMode])
-
+  }, [previewPdfs, preview, previewIndex])
 
   const hasNextPeriodInAgent = useMemo(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return false
-    for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    if (!preview || !('cuil' in preview) || !('periodo' in preview)) return false
+    for (let i = previewIndex + 1; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) return true
     }
     return false
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const handlePrevPeriodInAgent = useCallback(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return
+    if (!preview || !('cuil' in preview) || !('periodo' in preview)) return
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
-      const p = pdfs[i]
+      const p = previewPdfs[i]
       if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) {
         setPreviewIndex(i)
         return
       }
     }
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const handleNextPeriodInAgent = useCallback(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview) || !('periodo' in preview)) return
-    for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    if (!preview || !('cuil' in preview) || !('periodo' in preview)) return
+    for (let i = previewIndex + 1; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && 'periodo' in p && p.cuil === preview.cuil && p.periodo !== preview.periodo) {
         setPreviewIndex(i)
         return
       }
     }
-  }, [pdfs, preview, previewIndex, groupMode])
-
+  }, [previewPdfs, preview, previewIndex])
 
   const hasPrevAgent = useMemo(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return false
+    if (!preview || !('cuil' in preview)) return false
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
-      const p = pdfs[i]
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) return true
     }
     return false
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const hasNextAgent = useMemo(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return false
-    for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    if (!preview || !('cuil' in preview)) return false
+    for (let i = previewIndex + 1; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) return true
     }
     return false
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const handlePrevAgent = useCallback(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return
-    // Buscar el primer índice del agente anterior.
+    if (!preview || !('cuil' in preview)) return
     let prevAgentCuil: string | null = null
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
-      const p = pdfs[i]
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) {
         prevAgentCuil = p.cuil
         break
       }
     }
     if (!prevAgentCuil) return
-    for (let i = 0; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    for (let i = 0; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil === prevAgentCuil) {
         setPreviewIndex(i)
         return
       }
     }
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const handleNextAgent = useCallback(() => {
-    if (!preview || groupMode !== 'agent' || !('cuil' in preview)) return
+    if (!preview || !('cuil' in preview)) return
     let nextAgentCuil: string | null = null
-    for (let i = previewIndex + 1; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    for (let i = previewIndex + 1; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) {
         nextAgentCuil = p.cuil
         break
       }
     }
     if (!nextAgentCuil) return
-    for (let i = 0; i < pdfs.length; i += 1) {
-      const p = pdfs[i]
+    for (let i = 0; i < previewPdfs.length; i += 1) {
+      const p = previewPdfs[i]
       if ('cuil' in p && p.cuil === nextAgentCuil) {
         setPreviewIndex(i)
         return
       }
     }
-  }, [pdfs, preview, previewIndex, groupMode])
+  }, [previewPdfs, preview, previewIndex])
 
   const handlePreviewSearch = useCallback(
     (query: string) => {
       const q = query.trim().toLowerCase()
       if (!q) return
 
-      if (groupMode === 'agent') {
-        // Buscar primero por CUIL y luego por período.
-        let targetIndex = pdfs.findIndex(
-          (p) =>
-            'cuil' in p &&
-            (p.cuil.toLowerCase().startsWith(q) || p.periodo.toLowerCase().startsWith(q)),
-        )
-        if (targetIndex === -1) {
-          // fallback: contiene en período
-          targetIndex = pdfs.findIndex((p) => 'periodo' in p && p.periodo.toLowerCase().includes(q))
-        }
-        if (targetIndex !== -1) setPreviewIndex(targetIndex)
-        return
+      let targetIndex = previewPdfs.findIndex(
+        (p) =>
+          p.cuil.toLowerCase().startsWith(q) || p.periodo.toLowerCase().startsWith(q),
+      )
+      if (targetIndex === -1) {
+        targetIndex = previewPdfs.findIndex((p) => p.periodo.toLowerCase().includes(q))
       }
-
-      // Modo por período: buscar por período solamente.
-      const targetIndex = pdfs.findIndex((p) => 'periodo' in p && p.periodo.toLowerCase().startsWith(q))
       if (targetIndex !== -1) setPreviewIndex(targetIndex)
     },
-    [groupMode, pdfs],
+    [previewPdfs],
   )
 
   const keys = useMemo(() => {
@@ -316,6 +294,7 @@ export function PayrollPage() {
 
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
+      if (queryMode === 'manual') return
       dispatch({
         type: 'ADD_CSV_SOURCE',
         payload: {
@@ -327,7 +306,7 @@ export function PayrollPage() {
         },
       })
     },
-    [dispatch],
+    [dispatch, queryMode],
   )
 
   const manualIdValid = useMemo(() => {
@@ -348,10 +327,10 @@ export function PayrollPage() {
     queryMode === 'manual' ? manualPeriodos.length : batchUseManualPeriods ? periodos.length : availablePeriodos.length
 
   useEffect(() => {
-    if (previewIndex >= pdfs.length && pdfs.length > 0) {
+    if (previewIndex >= previewPdfs.length && previewPdfs.length > 0) {
       setPreviewIndex(0)
     }
-  }, [pdfs.length, previewIndex])
+  }, [previewPdfs.length, previewIndex])
 
   useEffect(() => {
     if (pageIndex >= totalPages && totalPages > 0) {
@@ -466,6 +445,7 @@ export function PayrollPage() {
                 periodos: s.periodos.length,
               }))}
               onRemoveSource={(index) => dispatch({ type: 'REMOVE_CSV_SOURCE', payload: { index } })}
+              disabled={queryMode === 'manual'}
             />
 
             <div className="space-y-4">
@@ -737,7 +717,7 @@ export function PayrollPage() {
                     setPreviewIndex(0)
                     setPdfOpen(true)
                   }}
-                  disabled={!preview || (data.items?.length ?? 0) === 0}
+                  disabled={previewPdfs.length === 0 || (data.items?.length ?? 0) === 0}
                 >
                   Vista previa PDF (primer grupo)
                 </Button>
@@ -745,12 +725,12 @@ export function PayrollPage() {
                   type="button"
                   variant="secondary"
                   onClick={() => void downloadAllPdfs()}
-                  disabled={pdfs.length === 0 || downloadingZip}
+                  disabled={zipPdfCount === 0 || downloadingZip}
                 >
                   {downloadingZip ? 'Generando ZIP…' : 'Descargar PDFs (ZIP)'}
                 </Button>
                 <span className="text-xs text-gray-600 self-center">
-                  {pdfs.length} PDF(s)
+                  {zipPdfCount} PDF(s) en el ZIP
                 </span>
               </div>
               {zipProgress ? (
@@ -802,28 +782,16 @@ export function PayrollPage() {
           <PdfPreviewModal
             doc={preview.doc}
             filename={pdfFilename(preview)}
-            metaLabel={
-              groupMode === 'agent' && 'cuil' in preview && 'periodo' in preview
-                ? `Agente ${preview.cuil} – Período ${preview.periodo}`
-                : 'periodo' in preview
-                ? `Período ${preview.periodo}`
-                : undefined
-            }
+            metaLabel={`Agente ${preview.cuil} – Período ${preview.periodo}`}
             onClose={() => setPdfOpen(false)}
-            onPrev={
-              groupMode === 'agent' ? handlePrevPeriodInAgent : () => setPreviewIndex((idx) => Math.max(0, idx - 1))
-            }
-            onNext={
-              groupMode === 'agent'
-                ? handleNextPeriodInAgent
-                : () => setPreviewIndex((idx) => Math.min(pdfs.length - 1, idx + 1))
-            }
-            hasPrev={groupMode === 'agent' ? hasPrevPeriodInAgent : previewIndex > 0}
-            hasNext={groupMode === 'agent' ? hasNextPeriodInAgent : previewIndex < pdfs.length - 1}
-            onPrevAgent={groupMode === 'agent' ? handlePrevAgent : undefined}
-            onNextAgent={groupMode === 'agent' ? handleNextAgent : undefined}
-            hasPrevAgent={groupMode === 'agent' ? hasPrevAgent : false}
-            hasNextAgent={groupMode === 'agent' ? hasNextAgent : false}
+            onPrev={handlePrevPeriodInAgent}
+            onNext={handleNextPeriodInAgent}
+            hasPrev={hasPrevPeriodInAgent}
+            hasNext={hasNextPeriodInAgent}
+            onPrevAgent={handlePrevAgent}
+            onNextAgent={handleNextAgent}
+            hasPrevAgent={hasPrevAgent}
+            hasNextAgent={hasNextAgent}
             onSearch={handlePreviewSearch}
           />
         ) : null}
