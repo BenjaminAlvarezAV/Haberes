@@ -10,8 +10,10 @@ export function Card({
   className?: string
 }) {
   return (
-    <section className={`rounded-xl bg-white p-5 shadow-sm ring-1 ring-gray-200 ${className}`}>
-      {title ? <h2 className="mb-4 text-base font-semibold text-gray-900">{title}</h2> : null}
+    <section
+      className={`rounded-xl bg-surface p-5 shadow-[var(--app-shadow)] ring-1 ring-outline-variant ${className}`}
+    >
+      {title ? <h2 className="mb-4 text-base font-semibold text-on-surface">{title}</h2> : null}
       {children}
     </section>
   )

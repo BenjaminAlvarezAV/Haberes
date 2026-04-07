@@ -5,8 +5,21 @@ function formatCurrency(value: number): string {
   return value.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })
 }
 
-export function ResultsTable({ items }: { items: PayrollItem[] }) {
+/** En vista por agente, separar bloques por período. En vista por período, por agente (CUIL). */
+export type ResultsSeparatorBy = 'period' | 'agent'
+
+export function ResultsTable({
+  items,
+  separatorBy = 'period',
+}: {
+  items: PayrollItem[]
+  separatorBy?: ResultsSeparatorBy
+}) {
   const sorted = [...items].sort((a, b) => {
+    if (separatorBy === 'agent') {
+      if (a.cuil !== b.cuil) return a.cuil.localeCompare(b.cuil)
+      return a.concepto.localeCompare(b.concepto)
+    }
     if (a.periodo !== b.periodo) return a.periodo.localeCompare(b.periodo)
     if (a.cuil !== b.cuil) return a.cuil.localeCompare(b.cuil)
     return a.concepto.localeCompare(b.concepto)
@@ -15,9 +28,9 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
   const total = sorted.reduce((acc, it) => acc + it.importe, 0)
 
   return (
-    <div className="overflow-auto rounded-lg ring-1 ring-gray-200">
-      <table className="min-w-full divide-y divide-gray-200 bg-white text-sm">
-        <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+    <div className="overflow-auto rounded-lg ring-1 ring-outline-variant">
+      <table className="min-w-full divide-y divide-table-divide bg-surface text-sm">
+        <thead className="bg-surface-tonal text-left text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
           <tr>
             <th className="px-3 py-2">CUIL</th>
             <th className="px-3 py-2">Período</th>
@@ -25,10 +38,16 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
             <th className="px-3 py-2 text-right">Importe</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-table-divide">
           {sorted.map((it, idx) => {
             const prev = idx > 0 ? sorted[idx - 1] : null
-            const showSeparator = idx === 0 || (prev && prev.periodo !== it.periodo)
+            const showSeparator =
+              separatorBy === 'agent'
+                ? idx === 0 || (prev && prev.cuil !== it.cuil)
+                : idx === 0 || (prev && prev.periodo !== it.periodo)
+
+            const separatorLabel =
+              separatorBy === 'agent' ? `Agente ${it.cuil}` : `Período ${it.periodo}`
 
             return (
               <Fragment key={`${it.cuil}-${it.periodo}-${idx}`}>
@@ -36,19 +55,19 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
                   <tr>
                     <td
                       colSpan={4}
-                      className="bg-gray-200 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-gray-700"
+                      className="bg-surface-tonal px-3 py-1 text-xs font-semibold uppercase tracking-wide text-on-surface"
                     >
-                      Período {it.periodo}
+                      {separatorLabel}
                     </td>
                   </tr>
                 ) : null}
-                <tr className="hover:bg-gray-50">
-                  <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-gray-700">
+                <tr className="hover:bg-table-hover">
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-on-surface-variant">
                     {it.cuil}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-gray-700">{it.periodo}</td>
-                  <td className="px-3 py-2 text-gray-900">{it.concepto}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-gray-900">
+                  <td className="whitespace-nowrap px-3 py-2 text-on-surface-variant">{it.periodo}</td>
+                  <td className="px-3 py-2 text-on-surface">{it.concepto}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-on-surface">
                     {formatCurrency(it.importe)}
                   </td>
                 </tr>
@@ -56,12 +75,12 @@ export function ResultsTable({ items }: { items: PayrollItem[] }) {
             )
           })}
         </tbody>
-        <tfoot className="bg-gray-50">
+        <tfoot className="bg-surface-tonal">
           <tr>
-            <td className="px-3 py-2 text-xs font-semibold text-gray-600" colSpan={3}>
+            <td className="px-3 py-2 text-xs font-semibold text-on-surface-variant" colSpan={3}>
               Total sección
             </td>
-            <td className="px-3 py-2 text-right text-sm font-semibold tabular-nums text-gray-900">
+            <td className="px-3 py-2 text-right text-sm font-semibold tabular-nums text-on-surface">
               {formatCurrency(total)}
             </td>
           </tr>

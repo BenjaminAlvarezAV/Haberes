@@ -117,18 +117,18 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
       <div
         className={`space-y-3 ${
           disabled
-            ? 'pointer-events-none select-none rounded-lg border border-gray-200 bg-gray-100 p-3 opacity-60 saturate-0'
+            ? 'pointer-events-none select-none rounded-lg border border-outline-variant bg-surface-tonal p-3 opacity-60 saturate-0'
             : ''
         }`}
       >
         <div className="flex items-center justify-between gap-3">
           <div>
             <label
-              className={`block text-sm font-medium ${disabled ? 'text-gray-500' : 'text-gray-900'}`}
+              className={`block text-sm font-medium ${disabled ? 'text-on-surface-variant' : 'text-on-surface'}`}
             >
               Archivo Sercope (CSV)
             </label>
-            <p className={`text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+            <p className={`text-xs ${disabled ? 'text-on-surface-variant' : 'text-on-surface-variant'}`}>
               Columnas: Documento (DNI 8 o CUIL 11), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM),
               Secuencia (000). No se permiten períodos futuros.
             </p>
@@ -137,7 +137,7 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
             type="button"
             onClick={onPick}
             disabled={disabled}
-            className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-200 disabled:text-gray-500"
+            className="rounded-md border border-outline-variant bg-surface px-3 py-2 text-sm text-on-surface hover:bg-table-hover disabled:cursor-not-allowed disabled:border-outline-variant/60 disabled:bg-surface-tonal disabled:text-on-surface-variant"
           >
             Seleccionar archivo
           </button>
@@ -146,8 +146,8 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
         <div
           className={`rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors ${
             disabled
-              ? 'cursor-not-allowed border-gray-300/80 bg-gray-200/50'
-              : 'border-gray-300 bg-white hover:border-blue-400'
+              ? 'cursor-not-allowed border-outline-variant/60 bg-surface-tonal/80'
+              : 'border-outline-variant bg-surface hover:border-primary'
           }`}
         onDrop={onDrop}
         onDragOver={(e) => e.preventDefault()}
@@ -169,42 +169,42 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
             disabled={disabled}
             onChange={onChange}
           />
-          <p className={`text-sm font-medium ${disabled ? 'text-gray-500' : 'text-gray-900'}`}>
+          <p className={`text-sm font-medium ${disabled ? 'text-on-surface-variant' : 'text-on-surface'}`}>
             Arrastrá y soltá el CSV acá
           </p>
-          <p className={`mt-1 text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+          <p className={`mt-1 text-xs ${disabled ? 'text-on-surface-variant' : 'text-on-surface-variant'}`}>
             o hacé click para seleccionar
           </p>
         </div>
 
         {report ? (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-6">
-          <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-            <div className="text-xs text-gray-600">Líneas</div>
-            <div className="font-semibold text-gray-900">{report.totalLines}</div>
+          <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+            <div className="text-xs text-on-surface-variant">Líneas</div>
+            <div className="font-semibold text-on-surface">{report.totalLines}</div>
           </div>
-          <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-            <div className="text-xs text-gray-600">Válidos</div>
-            <div className="font-semibold text-gray-900">{report.valid}</div>
+          <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+            <div className="text-xs text-on-surface-variant">Válidos</div>
+            <div className="font-semibold text-on-surface">{report.valid}</div>
           </div>
-          <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-            <div className="text-xs text-gray-600">Inválidos</div>
-            <div className="font-semibold text-gray-900">{report.invalid}</div>
+          <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+            <div className="text-xs text-on-surface-variant">Inválidos</div>
+            <div className="font-semibold text-on-surface">{report.invalid}</div>
           </div>
-          <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-            <div className="text-xs text-gray-600">Duplicados</div>
-            <div className="font-semibold text-gray-900">{report.duplicates}</div>
+          <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+            <div className="text-xs text-on-surface-variant">Duplicados</div>
+            <div className="font-semibold text-on-surface">{report.duplicates}</div>
           </div>
           {typeof report.parseMs === 'number' ? (
-            <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-              <div className="text-xs text-gray-600">Tiempo</div>
-              <div className="font-semibold text-gray-900">{(report.parseMs / 1000).toFixed(2)}s</div>
+            <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+              <div className="text-xs text-on-surface-variant">Tiempo</div>
+              <div className="font-semibold text-on-surface">{(report.parseMs / 1000).toFixed(2)}s</div>
             </div>
           ) : null}
           {typeof report.rowsPerSec === 'number' ? (
-            <div className="rounded-md bg-gray-50 p-3 ring-1 ring-gray-200">
-              <div className="text-xs text-gray-600">Filas/seg</div>
-              <div className="font-semibold text-gray-900">
+            <div className="rounded-md bg-surface-tonal p-3 ring-1 ring-outline-variant">
+              <div className="text-xs text-on-surface-variant">Filas/seg</div>
+              <div className="font-semibold text-on-surface">
                 {report.rowsPerSec.toLocaleString('es-AR')}
               </div>
             </div>
@@ -213,28 +213,28 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
         ) : null}
 
         {derivedPeriods.length > 0 ? (
-          <p className={`text-xs ${disabled ? 'text-gray-500' : 'text-gray-600'}`}>
+          <p className={`text-xs ${disabled ? 'text-on-surface-variant' : 'text-on-surface-variant'}`}>
             Períodos derivados del CSV: <span className="font-medium">{derivedPeriods.length}</span>
           </p>
         ) : null}
       </div>
 
       {sources && sources.length > 0 ? (
-        <div className="space-y-1 text-xs text-gray-700">
+        <div className="space-y-1 text-xs text-on-surface">
           <p className="font-medium">CSV cargados en esta sesión:</p>
           <ul className="space-y-0.5">
             {sources.map((f, idx) => (
               <li key={`${f.name}-${idx}`} className="flex items-center justify-between gap-2">
                 <div>
                   <span className="font-mono">{f.name}</span>{' '}
-                  <span className="text-gray-600">
+                  <span className="text-on-surface-variant">
                     – {f.documentos} documento(s), {f.periodos} período(s)
                   </span>
                 </div>
                 {onRemoveSource ? (
                   <button
                     type="button"
-                    className="rounded px-1 text-[11px] text-gray-500 hover:bg-gray-100 hover:text-red-600"
+                    className="rounded px-1 text-[11px] text-on-surface-variant hover:bg-ghost-hover hover:text-danger-text"
                     aria-label={`Quitar CSV ${f.name}`}
                     onClick={(e) => {
                       e.stopPropagation()
@@ -251,13 +251,13 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
       ) : null}
 
       {parseProgress ? (
-        <p className="text-xs text-gray-600">
+        <p className="text-xs text-on-surface-variant">
           Procesando CSV: <span className="font-medium">{parseProgress.percent}%</span> ·{' '}
           {parseProgress.rows.toLocaleString('es-AR')} filas
         </p>
       ) : null}
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="text-sm text-danger-text">{error}</p> : null}
     </div>
   )
 }

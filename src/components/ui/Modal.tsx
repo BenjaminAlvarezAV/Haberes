@@ -33,18 +33,18 @@ export function Modal({
     >
       <button
         type="button"
-        className="absolute inset-0 h-full w-full bg-black/40"
+        className="absolute inset-0 h-full w-full bg-scrim"
         onClick={onClose}
         aria-label="Cerrar modal"
       />
-      <div className="relative z-10 w-full max-w-5xl rounded-xl bg-white shadow-xl ring-1 ring-gray-200">
-        <div className="flex items-center justify-between border-b border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+      <div className="relative z-10 w-full max-w-5xl rounded-xl bg-surface shadow-[var(--app-shadow)] ring-1 ring-outline-variant">
+        <div className="flex items-center justify-between border-b border-outline-variant p-4">
+          <h3 className="text-sm font-semibold text-on-surface">{title}</h3>
           <button
             ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-gray-700 hover:bg-gray-100"
+            className="rounded-md px-2 py-1 text-sm text-on-surface hover:bg-ghost-hover"
           >
             Cerrar
           </button>

@@ -71,8 +71,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               return { error: validationError('Ingresá un CUIL/DNI válido (11 o 8 dígitos, sin guiones)') }
             }
 
-            // En modo manual reutilizamos la misma lista de períodos seleccionados (state.periodos)
-            // que en el modo por lote.
+            // Manual: períodos = state.periodos (elegidos en PeriodSelector con available vacío: sin cruce con CSV).
             return { cuils: [id], periodos: state.periodos }
           })()
 

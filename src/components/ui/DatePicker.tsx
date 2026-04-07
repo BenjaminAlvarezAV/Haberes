@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 type DatePickerProps = {
   value: string
@@ -18,6 +18,27 @@ function parseDate(value: string | null | undefined): Date | null {
   const day = Number(match[3])
   if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null
   return new Date(year, month - 1, day)
+}
+
+/** Años en UI: sin futuros; hasta 20 años atrás; recortado por min/max. */
+const YEARS_BACK = 20
+
+function yearBounds(min?: string, max?: string): { yearLow: number; yearHigh: number } {
+  const thisYear = new Date().getFullYear()
+  const minParsed = parseDate(min)
+  const maxParsed = parseDate(max)
+  let yearLow = thisYear - YEARS_BACK
+  if (minParsed) yearLow = Math.max(yearLow, minParsed.getFullYear())
+  let yearHigh = thisYear
+  if (maxParsed) yearHigh = Math.min(yearHigh, maxParsed.getFullYear())
+  if (yearLow > yearHigh) yearLow = yearHigh
+  return { yearLow, yearHigh }
+}
+
+function yearsInRange(yearLow: number, yearHigh: number): number[] {
+  const out: number[] = []
+  for (let y = yearLow; y <= yearHigh; y += 1) out.push(y)
+  return out
 }
 
 function clampDate(date: Date, min?: string, max?: string): Date {
@@ -76,6 +97,20 @@ export function DatePicker({
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   const displayValue = formatDisplay(selectedDate)
+
+  const yearOptions = useMemo(() => {
+    const { yearLow, yearHigh } = yearBounds(min, max)
+    return yearsInRange(yearLow, yearHigh)
+  }, [min, max])
+
+  useEffect(() => {
+    if (yearOptions.length === 0) return
+    if (!yearOptions.includes(viewYear)) {
+      const hi = yearOptions[yearOptions.length - 1]
+      const lo = yearOptions[0]
+      setViewYear(viewYear > hi ? hi : lo)
+    }
+  }, [yearOptions, viewYear])
 
   // Mantener sincronizado el texto cuando cambia el valor externo
   useEffect(() => {
@@ -136,7 +171,7 @@ export function DatePicker({
           onChange(formatISO(clamped))
         }}
         placeholder={placeholder}
-        className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 pr-8 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 tabular-nums"
+        className="h-10 w-full rounded-md border border-outline-variant bg-input-bg px-3 pr-8 text-sm text-on-surface shadow-[var(--app-shadow)] placeholder:text-on-surface-variant/55 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25 tabular-nums"
       />
       <button
         type="button"
@@ -149,18 +184,18 @@ export function DatePicker({
           }
           setOpen((v) => !v)
         }}
-        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-gray-400 hover:text-gray-600"
+        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-on-surface-variant hover:text-on-surface"
         aria-label="Abrir selector de fecha"
       >
         <span aria-hidden="true">📅</span>
       </button>
 
       {open ? (
-        <div className="absolute z-20 mt-1 w-64 rounded-md border border-gray-200 bg-white p-2 text-xs shadow-lg">
+        <div className="absolute z-20 mt-1 w-64 rounded-md border border-outline-variant bg-surface p-2 text-xs shadow-[var(--app-shadow)]">
           <div className="mb-2 flex items-center justify-between gap-2">
             <button
               type="button"
-              className="rounded px-1 py-0.5 text-gray-600 hover:bg-gray-100"
+              className="rounded px-1 py-0.5 text-on-surface-variant hover:bg-ghost-hover"
               onClick={() => goMonth(-1)}
             >
               ‹
@@ -175,7 +210,7 @@ export function DatePicker({
                   const clamped = clampDate(candidate, min, max)
                   onChange(formatISO(clamped))
                 }}
-                className="rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px] text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
+                className="rounded border border-outline-variant bg-input-bg px-1 py-0.5 text-[11px] text-on-surface focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               >
                 {MONTHS.map((name, idx) => (
                   <option key={name} value={idx}>
@@ -192,21 +227,18 @@ export function DatePicker({
                   const clamped = clampDate(candidate, min, max)
                   onChange(formatISO(clamped))
                 }}
-                className="rounded border border-gray-300 bg-white px-1 py-0.5 text-[11px] text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
+                className="rounded border border-outline-variant bg-input-bg px-1 py-0.5 text-[11px] text-on-surface focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
               >
-                {Array.from({ length: 15 }).map((_, idx) => {
-                  const year = new Date().getFullYear() - 10 + idx
-                  return (
-                    <option key={year} value={year}>
-                      {year}
-                    </option>
-                  )
-                })}
+                {yearOptions.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
               </select>
             </div>
             <button
               type="button"
-              className="rounded px-1 py-0.5 text-gray-600 hover:bg-gray-100"
+              className="rounded px-1 py-0.5 text-on-surface-variant hover:bg-ghost-hover"
               onClick={() => goMonth(1)}
             >
               ›

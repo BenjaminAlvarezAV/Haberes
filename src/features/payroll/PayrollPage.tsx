@@ -10,14 +10,14 @@ import { GroupToggle } from '../../components/results/GroupToggle'
 import { ResultsTable } from '../../components/results/ResultsTable'
 import { PdfPreviewModal } from '../../components/pdf/PdfPreviewModal'
 import { usePayroll } from '../../hooks/usePayroll'
-import { buildAgentPdfs, buildPeriodPdfs } from '../../pdf/builders'
-import type { AgentPeriodPdf, PeriodPdf } from '../../pdf/builders'
+import { buildAgentPdfs } from '../../pdf/builders'
+import type { AgentPeriodPdf } from '../../pdf/builders'
 import { createPdfBase64, downloadBlob } from '../../pdf/render'
 import { groupByAgent, groupByPeriod } from '../../utils/grouping'
 import type { GroupedByAgent, GroupedByPeriod } from '../../utils/grouping'
-import { currentPeriod, expandPeriodRange } from '../../utils/period'
+import { ThemeToggle } from '../../theme/ThemeToggle'
 
-type PdfEntry = AgentPeriodPdf | PeriodPdf
+type PdfEntry = AgentPeriodPdf
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -32,11 +32,7 @@ function isGroupedByPeriod(grouped: GroupedByAgent | GroupedByPeriod | null): gr
 }
 
 function pdfFilename(pdf: PdfEntry): string {
-  if ('cuil' in pdf && 'periodo' in pdf) {
-    return `haberes-${pdf.cuil}-${pdf.periodo}.pdf`
-  }
-  if ('cuil' in pdf) return `haberes-${pdf.cuil}.pdf`
-  return `haberes-${pdf.periodo}.pdf`
+  return `haberes-${pdf.cuil}-${pdf.periodo}.pdf`
 }
 
 const PDF_TIMEOUT_MS = 60000
@@ -56,33 +52,6 @@ async function createPdfBase64WithTimeout(doc: PdfEntry['doc'], ms: number): Pro
   })
 }
 
-function shiftMonthYear(value: string, yearsDelta: number): string {
-  const safe = value && /^\d{4}-\d{2}$/.test(value) ? value : currentPeriod()
-  const year = Number(safe.slice(0, 4)) + yearsDelta
-  const month = safe.slice(5, 7)
-  return `${year}-${month}`
-}
-
-function periodToInputDate(period: string): string {
-  if (!/^\d{4}-\d{2}$/.test(period)) return ''
-  return `${period}-01`
-}
-
-function inputDateToPeriod(value: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return ''
-  return value.slice(0, 7)
-}
-
-function shiftSearchDateYear(value: string, yearsDelta: number): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
-  const [y, m, d] = value.split('-').map((v) => Number(v))
-  const date = new Date(y + yearsDelta, m - 1, d)
-  const yy = date.getFullYear()
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const dd = String(date.getDate()).padStart(2, '0')
-  return `${yy}-${mm}-${dd}`
-}
-
 export function PayrollPage() {
   const {
     cuils,
@@ -91,9 +60,6 @@ export function PayrollPage() {
     batchUseManualPeriods,
     queryMode,
     manualCuil,
-    manualMonth,
-    manualFrom,
-    manualTo,
     groupMode,
     loading,
     error,
@@ -133,7 +99,7 @@ export function PayrollPage() {
     if (!data) return null
 
     let items = data.items
-    if (normalizedAgentSearch) {
+    if (queryMode !== 'manual' && normalizedAgentSearch) {
       items = items.filter((it) => it.cuil.toLowerCase().startsWith(normalizedAgentSearch))
     }
     if (normalizedPeriodSearch) {
@@ -144,7 +110,7 @@ export function PayrollPage() {
     const agents = data.agents.filter((a) => used.has(a.cuil))
 
     return { ...data, items, agents }
-  }, [data, normalizedAgentSearch, normalizedPeriodSearch])
+  }, [data, queryMode, normalizedAgentSearch, normalizedPeriodSearch])
 
   const grouped = useMemo(() => {
     if (!filteredData) return null
@@ -155,18 +121,22 @@ export function PayrollPage() {
     () => (filteredData ? buildAgentPdfs(filteredData, chequesByKey) : []),
     [filteredData, chequesByKey],
   )
-  const periodPdfs = useMemo(
-    () => (filteredData ? buildPeriodPdfs(filteredData, chequesByKey) : []),
-    [filteredData, chequesByKey],
-  )
   const chequesErrorCount = useMemo(
     () => Object.values(chequesByKey).filter((bundle) => bundle.errors && bundle.errors.length > 0).length,
     [chequesByKey],
   )
-  // Vista previa: siempre misma lista que en modo por agente (1 PDF por agente × período),
-  // así la navegación Agente / Período y la búsqueda son iguales con cualquier agrupación en pantalla.
-  const previewPdfs = agentPdfs
-  const zipPdfCount = groupMode === 'agent' ? agentPdfs.length : periodPdfs.length
+  // Vista previa: siempre 1 PDF por (agente × período), igual que al agrupar por agente.
+  // Con agrupación o filtro por período, ordenamos período → CUIL para alinear con la tabla y la paginación.
+  const previewPdfs = useMemo(() => {
+    if (agentPdfs.length === 0) return agentPdfs
+    const periodFirst = groupMode === 'period' || Boolean(normalizedPeriodSearch)
+    if (!periodFirst) return agentPdfs
+    return [...agentPdfs].sort((a, b) => {
+      if (a.periodo !== b.periodo) return a.periodo.localeCompare(b.periodo)
+      return a.cuil.localeCompare(b.cuil)
+    })
+  }, [agentPdfs, groupMode, normalizedPeriodSearch])
+  const zipPdfCount = agentPdfs.length
   const preview = previewPdfs[previewIndex] ?? null
 
   const hasPrevPeriodInAgent = useMemo(() => {
@@ -292,6 +262,27 @@ export function PayrollPage() {
   const totalPages = keys.length
   const currentKey = keys[pageIndex] ?? null
 
+  const openPdfPreview = useCallback(() => {
+    if (previewPdfs.length === 0) {
+      setPreviewIndex(0)
+      setPdfOpen(true)
+      return
+    }
+    let idx = 0
+    if (groupMode === 'period' && currentKey) {
+      const i = previewPdfs.findIndex((p) => p.periodo === currentKey)
+      idx = i >= 0 ? i : 0
+    } else if (groupMode === 'agent' && currentKey) {
+      const i = previewPdfs.findIndex((p) => p.cuil === currentKey)
+      idx = i >= 0 ? i : 0
+    } else if (normalizedPeriodSearch) {
+      const i = previewPdfs.findIndex((p) => p.periodo.toLowerCase().includes(normalizedPeriodSearch))
+      idx = i >= 0 ? i : 0
+    }
+    setPreviewIndex(idx)
+    setPdfOpen(true)
+  }, [previewPdfs, groupMode, currentKey, normalizedPeriodSearch])
+
   const onCsvParsed = useCallback(
     (payload: SercopeUploadPayload) => {
       if (queryMode === 'manual') return
@@ -314,17 +305,26 @@ export function PayrollPage() {
     return /^\d+$/.test(v) && (v.length === 8 || v.length === 11)
   }, [manualCuil])
 
-  const manualPeriodos = useMemo(() => {
-    // En modo manual derivamos siempre del rango DESDE-HASTA.
-    if (manualFrom && manualTo) {
-      return expandPeriodRange(manualFrom, manualTo)
-    }
-    return []
-  }, [manualFrom, manualTo])
-
   const effectiveDocCount = queryMode === 'manual' ? (manualIdValid ? 1 : 0) : cuils.length
+  // Manual: mismos períodos que elegís en el selector (no usan manualFrom/manualTo del estado; la consulta usa periodos).
   const effectivePeriodCount =
-    queryMode === 'manual' ? manualPeriodos.length : batchUseManualPeriods ? periodos.length : availablePeriodos.length
+    queryMode === 'manual'
+      ? periodos.length
+      : batchUseManualPeriods
+        ? periodos.length
+        : availablePeriodos.length
+
+  useEffect(() => {
+    if (queryMode === 'manual' && groupMode === 'agent') {
+      dispatch({ type: 'SET_GROUP_MODE', payload: 'period' })
+    }
+  }, [queryMode, groupMode, dispatch])
+
+  useEffect(() => {
+    if (queryMode === 'manual') {
+      setAgentSearch('')
+    }
+  }, [queryMode])
 
   useEffect(() => {
     if (previewIndex >= previewPdfs.length && previewPdfs.length > 0) {
@@ -342,7 +342,7 @@ export function PayrollPage() {
     // Al cambiar filtros, volvemos al inicio para que el usuario no “caiga” en una página vacía.
     setPageIndex(0)
     setPreviewIndex(0)
-  }, [normalizedAgentSearch, normalizedPeriodSearch])
+  }, [normalizedAgentSearch, normalizedPeriodSearch, queryMode, groupMode])
 
   const clearFilters = useCallback(() => {
     setAgentSearch('')
@@ -359,11 +359,12 @@ export function PayrollPage() {
       setDownloadingZip(true)
       setZipProgress(null)
       setZipSkipped([])
-      const docs: PdfEntry[] =
-        groupMode === 'agent'
-          ? buildAgentPdfs(filteredData, chequesByKey)
-          : buildPeriodPdfs(filteredData, chequesByKey)
+      // Siempre 1 PDF por agente × período; la carpeta del ZIP depende del modo de agrupación.
+      const docs: PdfEntry[] = buildAgentPdfs(filteredData, chequesByKey)
       if (docs.length === 0) return
+
+      const manualDocFolder =
+        queryMode === 'manual' ? manualCuil.trim().replace(/\D/g, '') : ''
 
       const zip = new JSZip()
       let added = 0
@@ -374,11 +375,9 @@ export function PayrollPage() {
         setZipProgress({ current: i + 1, total: docs.length, label: filename })
         try {
           const base64 = await createPdfBase64WithTimeout(d.doc, PDF_TIMEOUT_MS)
-          const zipPath =
-            groupMode === 'agent' && 'cuil' in d
-              ? // Guardamos PDFs por agente en subcarpetas por CUIL.
-                `${d.cuil}/${filename}`
-              : filename
+          const inner =
+            groupMode === 'agent' ? `${d.cuil}/${filename}` : `${d.periodo}/${filename}`
+          const zipPath = manualDocFolder ? `${manualDocFolder}/${inner}` : inner
           zip.file(zipPath, base64, { base64: true })
           added += 1
           await sleep(50)
@@ -400,7 +399,15 @@ export function PayrollPage() {
         return
       }
 
-      const nextZipName = groupMode === 'agent' ? 'haberes-por-agente.zip' : 'haberes-por-periodo.zip'
+      const nextZipName =
+        queryMode === 'manual'
+          ? (() => {
+              const id = manualCuil.trim().replace(/\D/g, '')
+              return id ? `haberes-${id}.zip` : 'haberes-manual.zip'
+            })()
+          : groupMode === 'agent'
+            ? 'haberes-por-agente.zip'
+            : 'haberes-por-periodo.zip'
       const rawZipBlob = await zip.generateAsync({ type: 'blob' })
       // Asegurar MIME para mejorar compatibilidad (algunos browsers descargan mejor con type explícito).
       const zipBlob = new Blob([rawZipBlob], { type: 'application/zip' })
@@ -419,20 +426,21 @@ export function PayrollPage() {
       setDownloadingZip(false)
       setZipProgress(null)
     }
-  }, [filteredData, groupMode, chequesByKey])
+  }, [filteredData, groupMode, chequesByKey, queryMode, manualCuil])
 
   return (
-    <div className="min-h-screen bg-gray-100 px-4 py-8 text-gray-900">
+    <div className="min-h-screen bg-background px-4 py-8 text-on-surface">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-2xl font-semibold">
               Sistema de Consulta de Haberes Docentes
             </h1>
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-on-surface-variant">
               Podés consultar por lote cargando un CSV (Sercope) o de forma manual por CUIL/DNI y período.
             </p>
           </div>
+          <ThemeToggle />
         </header>
 
         <Card title="Entrada de datos">
@@ -452,8 +460,8 @@ export function PayrollPage() {
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h4 className="text-sm font-semibold text-gray-900">Modo de carga</h4>
-                    <p className="text-xs text-gray-600">
+                    <h4 className="text-sm font-semibold text-on-surface">Modo de carga</h4>
+                    <p className="text-xs text-on-surface-variant">
                       Elegí cómo querés consultar y generar los PDFs.
                     </p>
                   </div>
@@ -477,10 +485,10 @@ export function PayrollPage() {
 
                 {queryMode === 'batch' ? (
                   <div className="space-y-3">
-                    <label className="inline-flex items-center gap-2 text-sm text-gray-900 select-none">
+                    <label className="inline-flex items-center gap-2 text-sm text-on-surface select-none">
                       <input
                         type="checkbox"
-                        className="h-4 w-4 accent-blue-600"
+                        className="h-4 w-4 accent-primary"
                         checked={batchUseManualPeriods}
                         onChange={(e) =>
                           dispatch({ type: 'SET_BATCH_USE_MANUAL_PERIODS', payload: e.target.checked })
@@ -489,7 +497,7 @@ export function PayrollPage() {
                       Seleccionar períodos manualmente
                     </label>
                     {!batchUseManualPeriods ? (
-                      <p className="text-xs text-gray-600">
+                      <p className="text-xs text-on-surface-variant">
                         Se usan automáticamente los rangos por DNI que vienen en el CSV (Periodo Desde/Hasta).
                       </p>
                     ) : null}
@@ -504,7 +512,7 @@ export function PayrollPage() {
                 ) : (
                   <div className="space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-900">
+                      <label className="block text-sm font-medium text-on-surface">
                         CUIL/DNI (sin guiones)
                       </label>
                       <div className="mt-1">
@@ -520,7 +528,7 @@ export function PayrollPage() {
                           placeholder="Ingresá un único CUIL (11) o DNI (8)…"
                         />
                       </div>
-                      <p className="mt-1 text-xs text-gray-600">
+                      <p className="mt-1 text-xs text-on-surface-variant">
                         {manualCuil.trim().length === 0 ? (
                           <>Ingresá un único valor (solo números).</>
                         ) : manualIdValid ? (
@@ -533,7 +541,7 @@ export function PayrollPage() {
 
                     <PeriodSelector
                       value={periodos}
-                      available={availablePeriodos}
+                      available={[]}
                       onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
                     />
                   </div>
@@ -544,13 +552,13 @@ export function PayrollPage() {
                 <Button type="button" onClick={() => void consult()} disabled={loading}>
                   {loading ? 'Consultando' : 'Consultar'}
                 </Button>
-                <div className="text-sm text-gray-700">
+                <div className="text-sm text-on-surface-variant">
                   <span className="font-medium">{effectiveDocCount}</span> documentos{' '}
                   <span className="font-medium">{effectivePeriodCount}</span> período(s)
                 </div>
               </div>
               {loading && fetchProgress ? (
-                <p className="text-xs text-gray-600">
+                <p className="text-xs text-on-surface-variant">
                   {fetchProgress.label}{' '}
                   {fetchProgress.total > 0
                     ? `${fetchProgress.current}/${fetchProgress.total} · ${Math.round(
@@ -560,27 +568,27 @@ export function PayrollPage() {
                 </p>
               ) : null}
               {!loading && data && dataStale ? (
-                <p className="text-xs text-amber-700">
+                <p className="text-xs text-warning-text">
                   Se cargaron o modificaron CSV después de esta consulta. Los resultados de abajo
                   corresponden a la consulta anterior; presioná &quot;Consultar&quot; para
                   actualizarlos.
                 </p>
               ) : null}
               {!loading && chequesErrorCount > 0 ? (
-                <p className="text-xs text-amber-700">
+                <p className="text-xs text-warning-text">
                   Cheques: {chequesErrorCount} consulta(s) con error. Reintentá Consultar.
                 </p>
               ) : null}
 
               {lastUploadReport ? (
-                <p className="text-xs text-gray-600">
+                <p className="text-xs text-on-surface-variant">
                   Último CSV: {lastUploadReport.valid} válidos, {lastUploadReport.invalid} inválidos,{' '}
                   {lastUploadReport.duplicates} duplicados.
                 </p>
               ) : null}
 
               {error ? (
-                <div className="rounded-md bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
+                <div className="rounded-md bg-danger-bg p-3 text-sm text-danger-text ring-1 ring-danger-border">
                   {error.message}
                 </div>
               ) : null}
@@ -591,19 +599,32 @@ export function PayrollPage() {
         {data ? (
           <Card>
             <div className="space-y-4">
-              <GroupToggle
-                value={groupMode}
-                onChange={(mode) => dispatch({ type: 'SET_GROUP_MODE', payload: mode })}
-              />
-
-              <div className="grid gap-3 md:grid-cols-4">
-                <Input
-                  value={agentSearch}
-                  onChange={(event) => {
-                    setAgentSearch(event.target.value)
-                  }}
-                  placeholder="Buscar por documento/agente…"
+              {queryMode === 'batch' ? (
+                <GroupToggle
+                  value={groupMode}
+                  onChange={(mode) => dispatch({ type: 'SET_GROUP_MODE', payload: mode })}
                 />
+              ) : (
+                <div>
+                  <h3 className="text-sm font-semibold text-on-surface">Resultados</h3>
+                  <p className="text-xs text-on-surface-variant">Agrupados por período (un solo agente en consulta manual).</p>
+                </div>
+              )}
+
+              <div
+                className={
+                  queryMode === 'manual' ? 'grid gap-3 md:grid-cols-3' : 'grid gap-3 md:grid-cols-4'
+                }
+              >
+                {queryMode === 'batch' ? (
+                  <Input
+                    value={agentSearch}
+                    onChange={(event) => {
+                      setAgentSearch(event.target.value)
+                    }}
+                    placeholder="Buscar por documento/agente…"
+                  />
+                ) : null}
                 <DatePicker
                   value={periodSearchDate}
                   onChange={(next) => setPeriodSearchDate(next)}
@@ -614,12 +635,16 @@ export function PayrollPage() {
                   type="button"
                   variant="secondary"
                   onClick={clearFilters}
-                  disabled={!agentSearch.trim() && !periodSearchDate.trim()}
+                  disabled={
+                    queryMode === 'manual'
+                      ? !periodSearchDate.trim()
+                      : !agentSearch.trim() && !periodSearchDate.trim()
+                  }
                   className="h-8 self-end px-2 text-[11px] leading-none"
                 >
                   Limpiar filtros
                 </Button>
-                <div className="flex items-center gap-2 text-xs text-gray-600">
+                <div className="flex items-center gap-2 text-xs text-on-surface-variant">
                   <span>
                     {totalPages === 0
                       ? 'Sin resultados'
@@ -645,7 +670,7 @@ export function PayrollPage() {
               </div>
 
               {data.errors && data.errors.length > 0 ? (
-                <div className="rounded-md bg-amber-50 p-3 text-sm text-amber-800 ring-1 ring-amber-200 space-y-2">
+                <div className="rounded-md bg-warning-bg p-3 text-sm text-warning-text ring-1 ring-warning-border space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <p>
                       Se detectaron {data.errors.length} observaciones al normalizar la respuesta.
@@ -661,14 +686,7 @@ export function PayrollPage() {
                   </div>
                   {showErrorDetails ? (
                     (() => {
-                      const genericMessages = new Set<string>([
-                        'No se pudieron obtener pagos en ninguno de los períodos consultados para este documento. Verificá que los datos sean correctos o intentá más tarde.',
-                        'No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.',
-                      ])
-                      const onlyGeneric =
-                        data.errors?.length &&
-                        data.errors.every((e) => genericMessages.has(e.message))
-
+                      const errs = data.errors ?? []
                       return (
                         <div className="space-y-2 text-xs">
                           <div>
@@ -676,13 +694,11 @@ export function PayrollPage() {
                             <ul className="mt-1 list-disc pl-5">
                               {Array.from(
                                 new Map(
-                                  data.errors.map((e) => [
+                                  errs.map((e) => [
                                     e.cuil,
                                     {
                                       cuil: e.cuil,
-                                      messages: data.errors
-                                        .filter((x) => x.cuil === e.cuil)
-                                        .map((x) => x.message),
+                                      messages: errs.filter((x) => x.cuil === e.cuil).map((x) => x.message),
                                     },
                                   ]),
                                 ).values(),
@@ -690,7 +706,7 @@ export function PayrollPage() {
                                 <li key={entry.cuil}>
                                   <span className="font-mono">{entry.cuil}</span>
                                   {entry.messages.length > 0 ? (
-                                    <span className="text-gray-700">
+                                    <span className="text-on-surface-variant">
                                       {' '}
                                       – {entry.messages[0]}
                                       {entry.messages.length > 1
@@ -713,10 +729,7 @@ export function PayrollPage() {
               <div className="flex flex-wrap gap-3">
                 <Button
                   type="button"
-                  onClick={() => {
-                    setPreviewIndex(0)
-                    setPdfOpen(true)
-                  }}
+                  onClick={openPdfPreview}
                   disabled={previewPdfs.length === 0 || (data.items?.length ?? 0) === 0}
                 >
                   Vista previa PDF (primer grupo)
@@ -729,20 +742,20 @@ export function PayrollPage() {
                 >
                   {downloadingZip ? 'Generando ZIP…' : 'Descargar PDFs (ZIP)'}
                 </Button>
-                <span className="text-xs text-gray-600 self-center">
+                <span className="text-xs text-on-surface-variant self-center">
                   {zipPdfCount} PDF(s) en el ZIP
                 </span>
               </div>
               {zipProgress ? (
-                <p className="text-xs text-gray-600">
+                <p className="text-xs text-on-surface-variant">
                   Generando ZIP: {zipProgress.current}/{zipProgress.total} — {zipProgress.label}
                 </p>
               ) : null}
               {downloadError ? (
-                <p className="text-xs text-red-600">{downloadError}</p>
+                <p className="text-xs text-danger-text">{downloadError}</p>
               ) : null}
               {zipSkipped.length > 0 ? (
-                <p className="text-xs text-amber-700">
+                <p className="text-xs text-warning-text">
                   Se omitieron {zipSkipped.length} PDF(s): {zipSkipped.slice(0, 5).join(', ')}
                   {zipSkipped.length > 5 ? '…' : ''}
                 </p>
@@ -754,8 +767,8 @@ export function PayrollPage() {
                   <div className="space-y-6">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-gray-900">Agente {currentKey}</h4>
-                        <span className="text-xs text-gray-600">{grouped.byCuil[currentKey].length} ítems</span>
+                        <h4 className="text-sm font-semibold text-on-surface">Agente {currentKey}</h4>
+                        <span className="text-xs text-on-surface-variant">{grouped.byCuil[currentKey].length} ítems</span>
                       </div>
                       <ResultsTable items={grouped.byCuil[currentKey]} />
                     </div>
@@ -766,10 +779,10 @@ export function PayrollPage() {
                   <div className="space-y-6">
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold text-gray-900">Período {currentKey}</h4>
-                        <span className="text-xs text-gray-600">{grouped.byPeriod[currentKey].length} ítems</span>
+                        <h4 className="text-sm font-semibold text-on-surface">Período {currentKey}</h4>
+                        <span className="text-xs text-on-surface-variant">{grouped.byPeriod[currentKey].length} ítems</span>
                       </div>
-                      <ResultsTable items={grouped.byPeriod[currentKey]} />
+                      <ResultsTable items={grouped.byPeriod[currentKey]} separatorBy="agent" />
                     </div>
                   </div>
                 ) : null}

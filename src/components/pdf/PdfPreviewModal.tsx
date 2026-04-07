@@ -64,14 +64,14 @@ export function PdfPreviewModal({
       <div className="flex flex-col gap-2 pb-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            {metaLabel ? <p className="text-sm font-semibold text-gray-900">{metaLabel}</p> : null}
-            <p className="text-xs text-gray-700">
+            {metaLabel ? <p className="text-sm font-semibold text-on-surface">{metaLabel}</p> : null}
+            <p className="text-xs text-on-surface-variant">
               Podés revisar el PDF y luego descargarlo. Si el PDF está vacío, revisá filtros/períodos.
             </p>
             {onSearch ? (
               <div className="flex items-center gap-2 pt-1">
                 <input
-                  className="h-7 w-48 rounded-md border border-gray-300 px-2 text-xs text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="h-7 w-48 rounded-md border border-outline-variant bg-input-bg px-2 text-xs text-on-surface shadow-[var(--app-shadow)] placeholder:text-on-surface-variant/55 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                   placeholder="Buscar agente o período…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
@@ -97,8 +97,8 @@ export function PdfPreviewModal({
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
             {(onPrevAgent || onNextAgent) && (
-              <div className="flex items-center gap-1 rounded-md bg-gray-50 px-2 py-1 ring-1 ring-gray-200">
-                <span className="text-gray-600">Agente</span>
+              <div className="flex items-center gap-1 rounded-md bg-surface-tonal px-2 py-1 ring-1 ring-outline-variant">
+                <span className="text-on-surface-variant">Agente</span>
                 <Button
                   type="button"
                   variant="secondary"
@@ -119,8 +119,8 @@ export function PdfPreviewModal({
                 </Button>
               </div>
             )}
-            <div className="flex items-center gap-1 rounded-md bg-gray-50 px-2 py-1 ring-1 ring-gray-200">
-              <span className="text-gray-600">Período / página</span>
+            <div className="flex items-center gap-1 rounded-md bg-surface-tonal px-2 py-1 ring-1 ring-outline-variant">
+              <span className="text-on-surface-variant">Período / página</span>
               <Button
                 type="button"
                 variant="secondary"
@@ -147,17 +147,17 @@ export function PdfPreviewModal({
         </div>
       </div>
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="text-sm text-danger-text">{error}</p> : null}
 
       {url ? (
         <iframe
           title="Preview PDF"
           src={url}
-          className="h-[70vh] w-full rounded-md ring-1 ring-gray-200"
+          className="h-[70vh] w-full rounded-md ring-1 ring-outline-variant"
         />
       ) : (
-        <div className="flex h-[70vh] items-center justify-center rounded-md bg-gray-50 ring-1 ring-gray-200">
-          <p className="text-sm text-gray-600">Generando PDF…</p>
+        <div className="flex h-[70vh] items-center justify-center rounded-md bg-surface-tonal ring-1 ring-outline-variant">
+          <p className="text-sm text-on-surface-variant">Generando PDF…</p>
         </div>
       )}
     </Modal>

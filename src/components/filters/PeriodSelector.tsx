@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { currentPeriod, expandPeriodRange, isFuturePeriod, isValidPeriod } from '../../utils/period'
 import { Button } from '../ui/Button'
-import { Input } from '../ui/Input'
 import { DatePicker } from '../ui/DatePicker'
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -54,17 +53,6 @@ function inputDateToPeriod(value: string): string | null {
   return period
 }
 
-function shiftInputYear(value: string, yearsDelta: number): string {
-  const safe = value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : `${currentPeriod()}-01`
-  const [y, m, d] = safe.split('-').map((v) => Number(v))
-  const date = new Date(y, m - 1, d)
-  date.setFullYear(date.getFullYear() + yearsDelta)
-  const yy = date.getFullYear()
-  const mm = String(date.getMonth() + 1).padStart(2, '0')
-  const dd = String(date.getDate()).padStart(2, '0')
-  return `${yy}-${mm}-${dd}`
-}
-
 export function PeriodSelector({
   value,
   available,
@@ -100,10 +88,10 @@ export function PeriodSelector({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="inline-flex items-center gap-2 text-sm text-gray-900 select-none">
+        <label className="inline-flex items-center gap-2 text-sm text-on-surface select-none">
           <input
             type="checkbox"
-            className="h-4 w-4 accent-blue-600"
+            className="h-4 w-4 accent-primary"
             checked={useRangeFilter}
             onChange={(e) => {
               const next = e.target.checked
@@ -137,7 +125,7 @@ export function PeriodSelector({
       {useRangeFilter ? (
         <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto] items-end">
           <div>
-            <label className="block text-sm font-medium text-gray-900">Desde (mm/aaaa)</label>
+            <label className="block text-sm font-medium text-on-surface">Desde (mm/aaaa)</label>
             <div className="mt-1">
               <DatePicker
                 value={from}
@@ -149,7 +137,7 @@ export function PeriodSelector({
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-900">Hasta (mm/aaaa)</label>
+            <label className="block text-sm font-medium text-on-surface">Hasta (mm/aaaa)</label>
             <div className="mt-1">
               <DatePicker
                 value={to}
@@ -190,7 +178,7 @@ export function PeriodSelector({
       ) : (
         <div className="grid gap-3 lg:grid-cols-[1fr_auto] items-end">
           <div>
-            <label className="block text-sm font-medium text-gray-900">Período único (mm/aaaa)</label>
+            <label className="block text-sm font-medium text-on-surface">Período único (mm/aaaa)</label>
             <div className="mt-1">
               <DatePicker
                 value={singlePeriod ? `${singlePeriod}-01` : ''}
@@ -243,9 +231,18 @@ export function PeriodSelector({
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-gray-600">
-          Disponibles en CSV: <span className="font-medium">{availableSorted.length}</span> — Seleccionados:{' '}
-          <span className="font-medium">{sorted.length}</span>
+        <p className="text-xs text-on-surface-variant">
+          {availableSorted.length > 0 ? (
+            <>
+              Disponibles en CSV: <span className="font-medium">{availableSorted.length}</span> — Seleccionados:{' '}
+              <span className="font-medium">{sorted.length}</span>
+            </>
+          ) : (
+            <>
+              Consulta manual: cualquier período válido hasta el actual — Seleccionados:{' '}
+              <span className="font-medium">{sorted.length}</span>
+            </>
+          )}
         </p>
         <div className="flex items-center gap-2">
           <Button
@@ -272,7 +269,7 @@ export function PeriodSelector({
         </div>
       </div>
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="text-sm text-danger-text">{error}</p> : null}
 
       {sorted.length > 0 && showPeriods ? (
         // Si hay muchas filas, el contenedor queda scrolleable y no estira la página.
@@ -281,13 +278,13 @@ export function PeriodSelector({
             {sorted.map((p) => (
               <span
                 key={p}
-                className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-900 ring-1 ring-gray-200"
+                className="inline-flex items-center gap-2 rounded-full bg-surface-tonal px-3 py-1 text-sm text-on-surface ring-1 ring-outline-variant"
               >
                 {p}
                 <button
                   type="button"
                   onClick={() => remove(p)}
-                  className="rounded-full px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-200"
+                  className="rounded-full px-2 py-0.5 text-xs text-on-surface-variant hover:bg-ghost-hover"
                   aria-label={`Quitar período ${p}`}
                 >
                   ×
@@ -297,9 +294,11 @@ export function PeriodSelector({
           </div>
         </div>
       ) : (
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-on-surface-variant">
           {sorted.length > 0
-            ? 'Mostrando todos los períodos del CSV.'
+            ? availableSorted.length > 0
+              ? 'Mostrando todos los períodos del CSV.'
+              : 'Períodos elegidos para la consulta.'
             : 'Sin períodos seleccionados.'}
         </p>
       )}

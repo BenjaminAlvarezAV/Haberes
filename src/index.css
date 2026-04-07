@@ -1,6 +1,85 @@
 @import 'tailwindcss';
 
-/* App base styles (minimal, Tailwind-first) */
+/* Material Design 3–inspired tokens (surfaces, roles). Tema vía clase .dark en <html>. */
+:root {
+  color-scheme: light;
+  --app-background: #f2f0f7;
+  --app-surface: #fef7ff;
+  --app-surface-tonal: #ece6f0;
+  --app-on-surface: #1d1b20;
+  --app-on-surface-variant: #49454f;
+  --app-outline: #79747e;
+  --app-outline-variant: #cac4d0;
+  --app-primary: #6750a4;
+  --app-on-primary: #ffffff;
+  --app-primary-hover: #5a4490;
+  --app-ghost-hover: rgba(103, 80, 164, 0.08);
+  --app-danger-bg: #f9dedc;
+  --app-danger-border: #f2b8b5;
+  --app-danger-text: #852221;
+  --app-warning-bg: #fff8e5;
+  --app-warning-border: #f5e0a3;
+  --app-warning-text: #7c5800;
+  --app-table-hover: rgba(103, 80, 164, 0.06);
+  --app-table-divide: #e7e0ec;
+  --app-row-separator: #e0e0e0;
+  --app-scrim: rgba(0, 0, 0, 0.4);
+  --app-input-bg: #ffffff;
+  --app-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.dark {
+  color-scheme: dark;
+  --app-background: #141218;
+  --app-surface: #1d1b20;
+  --app-surface-tonal: #2b2930;
+  --app-on-surface: #e6e1e5;
+  --app-on-surface-variant: #cac4d0;
+  --app-outline: #938f99;
+  --app-outline-variant: #49454f;
+  --app-primary: #d0bcff;
+  --app-on-primary: #381e72;
+  --app-primary-hover: #b69df8;
+  --app-ghost-hover: rgba(208, 188, 255, 0.12);
+  --app-danger-bg: #8c1d18;
+  --app-danger-border: #b3261e;
+  --app-danger-text: #f9dedc;
+  --app-warning-bg: #3d2f00;
+  --app-warning-border: #6b5a1e;
+  --app-warning-text: #ffe08a;
+  --app-table-hover: rgba(208, 188, 255, 0.08);
+  --app-table-divide: #49454f;
+  --app-row-separator: #49454f;
+  --app-scrim: rgba(0, 0, 0, 0.6);
+  --app-input-bg: #2b2930;
+  --app-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  --color-background: var(--app-background);
+  --color-surface: var(--app-surface);
+  --color-surface-tonal: var(--app-surface-tonal);
+  --color-on-surface: var(--app-on-surface);
+  --color-on-surface-variant: var(--app-on-surface-variant);
+  --color-outline: var(--app-outline);
+  --color-outline-variant: var(--app-outline-variant);
+  --color-primary: var(--app-primary);
+  --color-on-primary: var(--app-on-primary);
+  --color-primary-hover: var(--app-primary-hover);
+  --color-ghost-hover: var(--app-ghost-hover);
+  --color-danger-bg: var(--app-danger-bg);
+  --color-danger-border: var(--app-danger-border);
+  --color-danger-text: var(--app-danger-text);
+  --color-warning-bg: var(--app-warning-bg);
+  --color-warning-border: var(--app-warning-border);
+  --color-warning-text: var(--app-warning-text);
+  --color-table-hover: var(--app-table-hover);
+  --color-table-divide: var(--app-table-divide);
+  --color-row-separator: var(--app-row-separator);
+  --color-scrim: var(--app-scrim);
+  --color-input-bg: var(--app-input-bg);
+}
+
 html,
 body {
   height: 100%;
@@ -9,20 +88,22 @@ body {
 body {
   margin: 0;
   font-family:
+    'Roboto',
     ui-sans-serif,
     system-ui,
     -apple-system,
-    Segoe UI,
-    Roboto,
+    'Segoe UI',
     Arial,
     'Noto Sans',
-    'Liberation Sans',
     sans-serif;
-  color: rgb(17 24 39);
-  background: rgb(243 244 246);
+  background: var(--app-background);
+  color: var(--app-on-surface);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
 }
 
 :focus-visible {
-  outline: 2px solid rgb(59 130 246);
+  outline: 2px solid var(--app-primary);
   outline-offset: 2px;
 }

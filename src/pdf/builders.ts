@@ -51,24 +51,6 @@ function formatHsDisplay(value: string | null | undefined): string {
   return n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function formatDistritoTipoNumero(
-  distritoInt: string | null | undefined,
-  tipoOrg: string | null | undefined,
-  numero: string | null | undefined,
-): string {
-  const dRaw = String(distritoInt ?? '')
-    .replace(/\D/g, '')
-    .trim()
-  const t = String(tipoOrg ?? '').trim()
-  const nRaw = String(numero ?? '')
-    .replace(/\D/g, '')
-    .trim()
-  if (!dRaw && !t && !nRaw) return '—'
-  const d = dRaw ? String(parseInt(dRaw, 10)).padStart(3, '0') : '---'
-  const n = nRaw ? String(parseInt(nRaw, 10)).padStart(4, '0') : '----'
-  return `${d}-${t || '--'}-${n}`
-}
-
 function pickOrdenPagoPadded(opids: string[]): string {
   const trimmed = opids.map((x) => x.trim()).filter((x) => x.length > 0)
   if (trimmed.length === 0) return '—'

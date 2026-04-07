@@ -9,7 +9,7 @@ type OutputDocument = {
 }
 
 function createOutput(doc: TDocumentDefinitions): OutputDocument {
-  return pdfMake.createPdf(doc) as OutputDocument
+  return pdfMake.createPdf(doc) as unknown as OutputDocument
 }
 
 export async function createPdfBlob(doc: TDocumentDefinitions): Promise<Blob> {
