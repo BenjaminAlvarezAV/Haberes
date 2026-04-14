@@ -52,13 +52,8 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       }
 
       if (!/^[A-Z0-9]{8}$/.test(cleaned)) return null
-      if (/^\d{8}$/.test(cleaned)) return { apiId: cleaned, originalDoc: cleaned, fromCuil: false }
-
-      // Compatibilidad: algunos DNIs alfanuméricos se consultan por su parte numérica (8 dígitos).
-      const digits = cleaned.replace(/\D/g, '')
-      if (digits.length === 8) return { apiId: digits, originalDoc: cleaned, fromCuil: false }
-      if (digits.length === 7) return { apiId: digits.padStart(8, '0'), originalDoc: cleaned, fromCuil: false }
-      return null
+      // DNI (numérico o alfanumérico) se consulta tal cual llega (8 caracteres).
+      return { apiId: cleaned, originalDoc: cleaned, fromCuil: false }
     }
     const normalizeRequestedId = (raw: string): string | null => {
       return normalizeRequestedDoc(raw)?.apiId ?? null

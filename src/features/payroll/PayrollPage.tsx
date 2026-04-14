@@ -209,18 +209,9 @@ export function PayrollPage() {
 
   const handlePrevAgent = useCallback(() => {
     if (!preview || !('cuil' in preview)) return
-    let prevAgentCuil: string | null = null
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
       const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) {
-        prevAgentCuil = p.cuil
-        break
-      }
-    }
-    if (!prevAgentCuil) return
-    for (let i = 0; i < previewPdfs.length; i += 1) {
-      const p = previewPdfs[i]
-      if ('cuil' in p && p.cuil === prevAgentCuil) {
         setPreviewIndex(i)
         return
       }
@@ -229,18 +220,9 @@ export function PayrollPage() {
 
   const handleNextAgent = useCallback(() => {
     if (!preview || !('cuil' in preview)) return
-    let nextAgentCuil: string | null = null
     for (let i = previewIndex + 1; i < previewPdfs.length; i += 1) {
       const p = previewPdfs[i]
       if ('cuil' in p && p.cuil !== preview.cuil) {
-        nextAgentCuil = p.cuil
-        break
-      }
-    }
-    if (!nextAgentCuil) return
-    for (let i = 0; i < previewPdfs.length; i += 1) {
-      const p = previewPdfs[i]
-      if ('cuil' in p && p.cuil === nextAgentCuil) {
         setPreviewIndex(i)
         return
       }

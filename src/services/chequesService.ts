@@ -14,6 +14,11 @@ const chequesClient = axios.create({
   timeout: 30_000,
 })
 
+function logDevRequest(endpoint: string, id: string, periodoYYYYMM: string): void {
+  if (!import.meta.env.DEV) return
+  console.info('[chequesService] request', { endpoint, id, periodoYYYYMM })
+}
+
 function keyFor(id: string, periodoYYYYMM: string): string {
   return `${id}-${periodoYYYYMM}`
 }
@@ -57,6 +62,9 @@ async function fetchWithRetries<T>(
 
 export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Promise<ChequesBundle> {
   const errors: string[] = []
+  logDevRequest('liquidPorEstablecimiento', id, periodoYYYYMM)
+  logDevRequest('liquidacionPorSecuencia', id, periodoYYYYMM)
+  logDevRequest('mensajeria', id, periodoYYYYMM)
 
   const [estab, secu, msg] = await Promise.all([
     fetchWithRetries(
@@ -106,6 +114,7 @@ export async function fetchLiquidacionPorSecuencia(
   periodoYYYYMM: string,
 ): Promise<{ rows: LiquidacionPorSecuenciaItem[]; errors: string[] }> {
   const errors: string[] = []
+  logDevRequest('liquidacionPorSecuencia', id, periodoYYYYMM)
   const rows =
     (await fetchWithRetries(
       () =>

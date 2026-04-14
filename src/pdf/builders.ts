@@ -84,12 +84,14 @@ function groupCodes(items: LiquidacionPorSecuenciaItem[]): Array<{ codigo: strin
   return Array.from(map.values()).sort((a, b) => a.codigo.localeCompare(b.codigo))
 }
 
-function yesNoFromFlag(value: string | null): string {
-  if (!value) return '—'
-  const v = String(value).trim().toLowerCase()
-  if (v === 's' || v === 'si' || v === 'sí' || v === 'y' || v === 'yes' || v === 'true' || v === '1') return 'S'
-  if (v === 'n' || v === 'no' || v === 'false' || v === '0') return 'N'
-  return value
+function esCarcelFromCcticas(value: string | null): 'S' | 'N' {
+  if (!value) return 'N'
+  return String(value).toUpperCase().includes('P') ? 'S' : 'N'
+}
+
+function dobleEscolFromCcticas(value: string | null): 'S' | 'N' {
+  if (!value) return 'N'
+  return String(value).toUpperCase().includes('C') ? 'S' : 'N'
 }
 
 const separatorOnlyRowLayout = {
@@ -128,6 +130,17 @@ type SecuenciaGroup = {
     ordenPagoPadded: string
     antiguedad: string
     inasistencias: string
+    interino: null | {
+      leftLine1: string
+      leftLine2: string
+      nombreEstab: string
+      categoria: string
+      desfavorabilidad: string
+      secciones: string
+      esCarcel: string
+      dobleEscol: string
+      turnos: string
+    }
   }
   items: LiquidacionPorSecuenciaItem[]
 }
@@ -208,6 +221,34 @@ function groupBySecuencia(
         if (numOk) return numero4
         return '-'
       })()
+      const interinoDistritoRaw = String(it.distritoInt ?? '').trim()
+      const interino = (() => {
+        if (!interinoDistritoRaw) return null
+        const distrito3Int = padLeftDigits(interinoDistritoRaw, 3, '-')
+        const nomDistInt = String(it.nomDistInt ?? '').trim() || '-'
+        const tipoOrgInt = (normalizeOrg(it.tipoOrgInt) || '-').toUpperCase()
+        const numeroInt = padLeftDigits(it.numeroInt, 4, '-')
+        const leftLine1Int = [distrito3Int, nomDistInt].filter((p) => p !== '-').join(' ') || '-'
+        const leftLine2Int = (() => {
+          const orgOk = tipoOrgInt !== '-'
+          const numOk = numeroInt !== '-'
+          if (orgOk && numOk) return `${tipoOrgInt}-${numeroInt}`
+          if (orgOk) return tipoOrgInt
+          if (numOk) return numeroInt
+          return '-'
+        })()
+        return {
+          leftLine1: leftLine1Int,
+          leftLine2: leftLine2Int,
+          nombreEstab: (it.nombreEstabInt ?? '').trim() || '—',
+          categoria: '',
+          desfavorabilidad: (it.ruralInt ?? '').trim() || '—',
+          secciones: (it.seccionesInt ?? '').trim() || '—',
+          esCarcel: esCarcelFromCcticas(it.ccticasInt),
+          dobleEscol: dobleEscolFromCcticas(it.ccticasInt),
+          turnos: (it.turnosInt ?? '').trim() || '—',
+        }
+      })()
 
       const mesaRaw = String(it.mesaPago ?? it.fecAfec ?? '')
         .replace(/\D/g, '')
@@ -225,15 +266,15 @@ function groupBySecuencia(
           leftLine1,
           leftLine2,
           nombreEstab: nombreEstab || '—',
-          categoria: (it.cat ?? '').trim() || '—',
+          categoria: '',
           desfavorabilidad: (it.rural ?? '').trim() || '—',
           secciones: (it.secciones ?? '').trim() || '—',
-          esCarcel: yesNoFromFlag(it.esCarcel),
-          dobleEscol: yesNoFromFlag(it.dobEscolEstab),
+          esCarcel: esCarcelFromCcticas(it.ccticas),
+          dobleEscol: dobleEscolFromCcticas(it.ccticas),
           turnos: (it.turnos ?? '').trim() || '—',
           secuencia: secu || '—',
           revista: rev || '—',
-          cargoReal: (it.cargoReal ?? '').trim() || '—',
+          cargoReal: (it.cat ?? '').trim() || '',
           choraria: formatHsDisplay(it.choraria),
           apoyoReal: (it.apoyoReal ?? '').trim() || '',
           cargoInt: (it.cargoInt ?? '').trim() || '',
@@ -242,6 +283,7 @@ function groupBySecuencia(
           ordenPagoPadded: '—',
           antiguedad: (it.antig ?? '').trim() || '—',
           inasistencias: (it.inas ?? '').trim() || '0.00',
+          interino,
         },
         items: [],
       })
@@ -562,8 +604,40 @@ function buildReceiptPage({
       ? secuGroups.flatMap((g) => {
           // El encabezado de la columna ya dice "ORDEN DE PAGO"; acá mostramos sólo el valor.
           const ordenLabel = g.meta.ordenPagoPadded !== '—' ? g.meta.ordenPagoPadded : '—'
-
-          const caracteristicasYsecuenciaTop = {
+          const interino = g.meta.interino
+          const establecimientoCaractRealRow = [
+            g.meta.categoria,
+            g.meta.desfavorabilidad,
+            g.meta.secciones,
+            g.meta.esCarcel,
+            g.meta.dobleEscol,
+            g.meta.turnos,
+          ] as const
+          const establecimientoCaractInterinoRow = interino
+            ? ([
+                interino.categoria,
+                interino.desfavorabilidad,
+                interino.secciones,
+                interino.esCarcel,
+                interino.dobleEscol,
+                interino.turnos,
+              ] as const)
+            : null
+          const buildEstablecimientoContainer = ({
+            leftLine1,
+            leftLine2,
+            nombreEstab,
+            caract,
+            isInterino = false,
+            marginTop = 0,
+          }: {
+            leftLine1: string
+            leftLine2: string
+            nombreEstab: string
+            caract: readonly [string, string, string, string, string, string]
+            isInterino?: boolean
+            marginTop?: number
+          }): Content => ({
             table: {
               widths: [50, '*', 96],
               body: [
@@ -572,26 +646,11 @@ function buildReceiptPage({
                     table: {
                       widths: ['*'],
                       body: [
-                        [
-                          {
-                            text: g.meta.leftLine1,
-                            style: 'tdTiny',
-                            alignment: 'center',
-                            margin: [0, 3, 0, 2],
-                          },
-                        ],
-                        [
-                          {
-                            text: g.meta.leftLine2,
-                            style: 'tdTiny',
-                            alignment: 'center',
-                            margin: [0, 2, 0, 3],
-                          },
-                        ],
+                        [cell(leftLine1, 'tdTiny', { alignment: 'center' })],
+                        [cell(leftLine2, 'tdTiny', { alignment: 'center' })],
                       ],
                     },
                     layout: separatorOnlyRowLayout,
-                    // Compensa el padding del layout externo para que la línea separadora llegue de borde a borde.
                     margin: [-BOXED_CELL_PADDING_X, 0, -BOXED_CELL_PADDING_X, 0],
                   },
                   {
@@ -600,7 +659,9 @@ function buildReceiptPage({
                       body: [
                         [
                           {
-                            text: 'CARACTERISTICAS DEL ESTABLECIMIENTO',
+                            text: isInterino
+                              ? 'CARACTERISTICAS DEL ESTABLECIMIENTO INTERINO'
+                              : 'CARACTERISTICAS DEL ESTABLECIMIENTO',
                             style: 'sectionBoxCaract',
                             colSpan: 6,
                             alignment: 'center',
@@ -621,12 +682,12 @@ function buildReceiptPage({
                           cell('TUR.', 'thCaract', { alignment: 'center' }),
                         ],
                         [
-                          cell(g.meta.categoria, 'tdCaract', { alignment: 'center' }),
-                          cell(g.meta.desfavorabilidad, 'tdCaract', { alignment: 'center' }),
-                          cell(g.meta.secciones, 'tdCaract', { alignment: 'center' }),
-                          cell(g.meta.esCarcel, 'tdCaract', { alignment: 'center' }),
-                          cell(g.meta.dobleEscol, 'tdCaract', { alignment: 'center' }),
-                          cell(g.meta.turnos, 'tdCaract', { alignment: 'center' }),
+                          cell(caract[0], 'tdCaract', { alignment: 'center' }),
+                          cell(caract[1], 'tdCaract', { alignment: 'center' }),
+                          cell(caract[2], 'tdCaract', { alignment: 'center' }),
+                          cell(caract[3], 'tdCaract', { alignment: 'center' }),
+                          cell(caract[4], 'tdCaract', { alignment: 'center' }),
+                          cell(caract[5], 'tdCaract', { alignment: 'center' }),
                         ],
                       ],
                     },
@@ -644,9 +705,7 @@ function buildReceiptPage({
                             fillColor: RECEIPT_SECTION_HEADER_FILL,
                           },
                         ],
-                        [cell(g.meta.nombreEstab, 'tdCaract', { margin: [0, 2, 0, 0] })],
-                        // Spacer interno para igualar altura con el bloque de características (sin línea visible).
-                        [cell('\u00A0', 'thCaract')],
+                        [cell(nombreEstab, 'tdCaract', { margin: [0, 2, 0, 2] })],
                       ],
                     },
                     layout: boxedLayoutCaractName,
@@ -655,6 +714,30 @@ function buildReceiptPage({
               ],
             },
             layout: boxedLayout,
+            ...(marginTop > 0 ? { margin: [0, marginTop, 0, 0] } : {}),
+          })
+
+          const establecimientoReal = buildEstablecimientoContainer({
+            leftLine1: g.meta.leftLine1,
+            leftLine2: g.meta.leftLine2,
+            nombreEstab: g.meta.nombreEstab,
+            caract: establecimientoCaractRealRow,
+            isInterino: false,
+          })
+          const establecimientoInterino =
+            interino && establecimientoCaractInterinoRow
+              ? buildEstablecimientoContainer({
+                  leftLine1: interino.leftLine1,
+                  leftLine2: interino.leftLine2,
+                  nombreEstab: interino.nombreEstab,
+                  caract: establecimientoCaractInterinoRow,
+                  isInterino: true,
+                  marginTop: 4,
+                })
+              : null
+
+          const caracteristicasYsecuenciaTop = {
+            stack: [establecimientoReal, ...(establecimientoInterino ? [establecimientoInterino] : [])],
             margin: [0, 0, 0, 6],
           }
 

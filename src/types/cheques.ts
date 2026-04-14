@@ -28,19 +28,27 @@ export interface LiquidacionPorSecuenciaItem {
   tipoOrg: string | null
   numero: string | null
   nombreEstab: string | null
+  tipoOrgInt: string | null
+  numeroInt: string | null
+  nombreEstabInt: string | null
   secu: string | null
   rev: string | null
   /** Código de establecimiento tal como viene del servicio (ej. 0097MT0006). */
   estabPag: string | null
   distritoInt: string | null
   ccticas: string | null
+  ccticasInt: string | null
   nomDistInt: string | null
 
   // Características
   cat: string | null
+  catInt: string | null
   rural: string | null
+  ruralInt: string | null
   secciones: string | null
+  seccionesInt: string | null
   turnos: string | null
+  turnosInt: string | null
   dobEscolEstab: string | null
   esCarcel: string | null
   direccion: string | null
