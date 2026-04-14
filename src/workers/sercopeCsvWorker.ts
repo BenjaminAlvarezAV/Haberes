@@ -30,6 +30,15 @@ function normalizeDigits(value: string): string {
   return value.replace(/[^\d]/g, '')
 }
 
+function normalizeDocumento(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+}
+
+function isValidDocumento(value: string): boolean {
+  // CUIL (11 dígitos) o DNI alfanumérico de 8 caracteres (incluye DNI numérico).
+  return /^\d{11}$/.test(value) || /^[A-Z0-9]{8}$/.test(value)
+}
+
 function isHeaderRow(parts: string[]): boolean {
   const lower = parts.join(' ').toLowerCase()
   return lower.includes('documento') && lower.includes('periodo')
@@ -37,13 +46,13 @@ function isHeaderRow(parts: string[]): boolean {
 
 function normalizeRow(parts: string[], maxYYYYMM: string): ParseSercopeRow | null {
   if (parts.length < 4) return null
-  const documento = normalizeDigits(parts[0] ?? '')
+  const documento = normalizeDocumento(parts[0] ?? '')
   const periodoDesde = normalizeDigits(parts[1] ?? '')
   const periodoHasta = normalizeDigits(parts[2] ?? '')
   const secuencia = normalizeDigits(parts[3] ?? '').padStart(3, '0')
 
-  // Permitimos DNI (8) o CUIL (11). La lógica de consulta/validación se aplica más adelante.
-  if (!/^\d{8}$/.test(documento) && !/^\d{11}$/.test(documento)) return null
+  // Permitimos DNI alfanumérico (8) o CUIL numérico (11).
+  if (!isValidDocumento(documento)) return null
   if (!isValidYYYYMM(periodoDesde) || !isValidYYYYMM(periodoHasta)) return null
   if (!/^\d{3}$/.test(secuencia)) return null
   if (periodoDesde > periodoHasta) return null

@@ -26,18 +26,42 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
 
   const consult = useCallback(async () => {
+    const normalizeDocumentoInput = (raw: string): string => {
+      return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+    }
+    const isValidDocumentoInput = (value: string): boolean => {
+      // CUIL (11 dígitos) o DNI alfanumérico (8 caracteres).
+      return /^\d{11}$/.test(value) || /^[A-Z0-9]{8}$/.test(value)
+    }
     const deriveDniFromCuil = (raw: string): string | null => {
       const cleaned = normalizeCuil(raw)
       if (!/^\d{11}$/.test(cleaned)) return null
       // CUIL (11) -> DNI (8): quitamos primeros 2 y último
       return cleaned.slice(2, 10)
     }
-    const normalizeRequestedId = (raw: string): string | null => {
-      const cleaned = normalizeCuil(raw)
-      if (!/^\d+$/.test(cleaned)) return null
-      if (cleaned.length === 11) return deriveDniFromCuil(cleaned)
-      if (cleaned.length === 8) return cleaned
+    const normalizeRequestedDoc = (
+      raw: string,
+    ): { apiId: string; originalDoc: string; fromCuil: boolean } | null => {
+      const cleaned = normalizeDocumentoInput(raw)
+      if (!cleaned) return null
+
+      if (/^\d{11}$/.test(cleaned)) {
+        const dni = deriveDniFromCuil(cleaned)
+        if (!dni) return null
+        return { apiId: dni, originalDoc: cleaned, fromCuil: true }
+      }
+
+      if (!/^[A-Z0-9]{8}$/.test(cleaned)) return null
+      if (/^\d{8}$/.test(cleaned)) return { apiId: cleaned, originalDoc: cleaned, fromCuil: false }
+
+      // Compatibilidad: algunos DNIs alfanuméricos se consultan por su parte numérica (8 dígitos).
+      const digits = cleaned.replace(/\D/g, '')
+      if (digits.length === 8) return { apiId: digits, originalDoc: cleaned, fromCuil: false }
+      if (digits.length === 7) return { apiId: digits.padStart(8, '0'), originalDoc: cleaned, fromCuil: false }
       return null
+    }
+    const normalizeRequestedId = (raw: string): string | null => {
+      return normalizeRequestedDoc(raw)?.apiId ?? null
     }
 
     // CSV obligatorio solo para modo "lote".
@@ -54,21 +78,29 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
     const effective =
       state.queryMode === 'batch'
         ? (() => {
-            const cuils = Array.from(new Set(state.cuils.map((c) => normalizeCuil(c))))
+            const cuils = Array.from(new Set(state.cuils.map((c) => normalizeDocumentoInput(c))))
               .map((id) => id.trim())
-              .filter((id) => /^\d+$/.test(id) && (id.length === 8 || id.length === 11))
+              .filter((id) => isValidDocumentoInput(id))
 
             if (cuils.length === 0) {
-              return { error: validationError('El CSV no contiene CUIL/DNI válidos (11 o 8 dígitos, sin guiones)') }
+              return {
+                error: validationError(
+                  'El CSV no contiene CUIL/DNI válidos (CUIL 11 dígitos o DNI alfanumérico de 8 caracteres).',
+                ),
+              }
             }
 
             return { cuils, periodos: state.periodos }
           })()
         : (() => {
-            const id = normalizeCuil(state.manualCuil)
-            const isOk = /^\d+$/.test(id) && (id.length === 8 || id.length === 11)
+            const id = normalizeDocumentoInput(state.manualCuil)
+            const isOk = isValidDocumentoInput(id)
             if (!isOk) {
-              return { error: validationError('Ingresá un CUIL/DNI válido (11 o 8 dígitos, sin guiones)') }
+              return {
+                error: validationError(
+                  'Ingresá un CUIL (11 dígitos) o un DNI alfanumérico válido (8 caracteres).',
+                ),
+              }
             }
 
             // Manual: períodos = state.periodos (elegidos en PeriodSelector con available vacío: sin cruce con CSV).
@@ -112,34 +144,38 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       // Si el usuario ingresa 11 dígitos asumimos CUIL, pero la API consulta por DNI.
       // Entonces: derivamos DNI (8) para consultar, y luego validamos contra el CUIL que devuelve el servicio.
       const expectedCuilsByRequestedId = new Map<string, Set<string>>() // dni -> cuil(s) ingresado(s)
+      const originalDocByApiId = new Map<string, string>()
       const requestedIds: string[] = []
 
       for (const raw of effective.cuils) {
-        const cleaned = normalizeCuil(raw)
-
-        if (cleaned.length === 11) {
-          const dni = deriveDniFromCuil(cleaned)
-          if (!dni || dni.length !== 8) {
-            dispatch({
-              type: 'FETCH_ERROR',
-              payload: validationError(`No se pudo derivar un DNI válido a partir del CUIL ingresado (${cleaned}).`),
-            })
-            return
-          }
-
-          const set = expectedCuilsByRequestedId.get(dni) ?? new Set<string>()
-          set.add(cleaned)
-          expectedCuilsByRequestedId.set(dni, set)
-          requestedIds.push(dni)
-          continue
+        const normalized = normalizeRequestedDoc(raw)
+        if (!normalized) continue
+        const { apiId, originalDoc, fromCuil } = normalized
+        if (!originalDocByApiId.has(apiId)) {
+          originalDocByApiId.set(apiId, originalDoc)
         }
 
-        requestedIds.push(cleaned)
+        if (fromCuil) {
+          const set = expectedCuilsByRequestedId.get(apiId) ?? new Set<string>()
+          set.add(originalDoc)
+          expectedCuilsByRequestedId.set(apiId, set)
+        }
+
+        requestedIds.push(apiId)
       }
 
       const uniqueRequestedIds = Array.from(new Set(requestedIds)).filter(
-        (id) => /^\d+$/.test(id) && (id.length === 8 || id.length === 11),
+        (id) => isValidDocumentoInput(id),
       )
+      if (uniqueRequestedIds.length === 0) {
+        dispatch({
+          type: 'FETCH_ERROR',
+          payload: validationError(
+            'No se pudo obtener un documento consultable para la API a partir de los valores ingresados.',
+          ),
+        })
+        return
+      }
 
       // 3) Construimos la "nómina" a partir de cheques,
       //    respetando los importes y descripciones que vienen de los endpoints.
@@ -330,7 +366,12 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       const chequesMap: Record<string, ChequesBundle> = {}
       for (const [key, bundle] of Object.entries(chequesMapRaw)) {
         const filt = secuenciaFilterByKey.get(key) ?? { mode: 'all' }
-        chequesMap[key] = filterChequesBundleBySecuencia(bundle, filt)
+        const normalizedBundle = filterChequesBundleBySecuencia(bundle, filt)
+        const originalDoc = originalDocByApiId.get(normalizedBundle.id)
+        const visibleId = originalDoc ?? normalizedBundle.id
+        const visibleBundle =
+          visibleId === normalizedBundle.id ? normalizedBundle : { ...normalizedBundle, id: visibleId }
+        chequesMap[`${visibleBundle.id}-${visibleBundle.periodoYYYYMM}`] = visibleBundle
       }
 
       Object.values(chequesMap).forEach((bundle) => {

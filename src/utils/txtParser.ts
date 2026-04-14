@@ -97,6 +97,15 @@ function normalizeDigits(value: string): string {
   return value.replace(/[^\d]/g, '')
 }
 
+function normalizeDocumento(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+}
+
+function isValidDocumento(value: string): boolean {
+  // CUIL (11 dígitos) o DNI alfanumérico de 8 caracteres (incluye DNI numérico).
+  return /^\d{11}$/.test(value) || /^[A-Z0-9]{8}$/.test(value)
+}
+
 function splitCsvLine(line: string): string[] {
   // Simple y tolerante: coma o punto y coma; quita comillas exteriores.
   const sep = line.includes(';') && !line.includes(',') ? ';' : ','
@@ -134,13 +143,13 @@ export function parseSercopeCsvTextDetailed(
       continue
     }
 
-    const documento = normalizeDigits(parts[0])
+    const documento = normalizeDocumento(parts[0] ?? '')
     const periodoDesde = normalizeDigits(parts[1])
     const periodoHasta = normalizeDigits(parts[2])
     const secuencia = normalizeDigits(parts[3]).padStart(3, '0')
 
-    // Permitimos DNI (8) o CUIL (11). La lógica de consulta/validación se aplica más adelante.
-    if (!/^\d{8}$/.test(documento) && !/^\d{11}$/.test(documento)) {
+    // Permitimos DNI alfanumérico (8) o CUIL numérico (11).
+    if (!isValidDocumento(documento)) {
       invalidLines.push(trimmed)
       continue
     }

@@ -129,8 +129,8 @@ export function CuilUploader({ onParsed, sources, onRemoveSource, disabled = fal
               Archivo Sercope (CSV)
             </label>
             <p className={`text-xs ${disabled ? 'text-on-surface-variant' : 'text-on-surface-variant'}`}>
-              Columnas: Documento (DNI 8 o CUIL 11), PeriodoDesde (YYYYMM), PeriodoHasta (YYYYMM),
-              Secuencia (000). No se permiten períodos futuros.
+              Columnas: Documento (DNI alfanumérico de 8 o CUIL de 11), PeriodoDesde (YYYYMM),
+              PeriodoHasta (YYYYMM), Secuencia (000). No se permiten períodos futuros.
             </p>
           </div>
           <button

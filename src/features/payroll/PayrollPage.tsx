@@ -138,6 +138,16 @@ export function PayrollPage() {
   }, [agentPdfs, groupMode, normalizedPeriodSearch])
   const zipPdfCount = agentPdfs.length
   const preview = previewPdfs[previewIndex] ?? null
+  const previewAgentOrder = useMemo(
+    () => Array.from(new Set(previewPdfs.map((p) => p.cuil))),
+    [previewPdfs],
+  )
+  const previewAgentPositionLabel = useMemo(() => {
+    if (!preview) return null
+    const idx = previewAgentOrder.findIndex((id) => id === preview.cuil)
+    if (idx < 0) return null
+    return `${idx + 1}/${previewAgentOrder.length}`
+  }, [preview, previewAgentOrder])
 
   const hasPrevPeriodInAgent = useMemo(() => {
     if (!preview || !('cuil' in preview) || !('periodo' in preview)) return false
@@ -301,8 +311,8 @@ export function PayrollPage() {
   )
 
   const manualIdValid = useMemo(() => {
-    const v = manualCuil.trim()
-    return /^\d+$/.test(v) && (v.length === 8 || v.length === 11)
+    const v = manualCuil.trim().toUpperCase()
+    return /^\d{11}$/.test(v) || /^[A-Z0-9]{8}$/.test(v)
   }, [manualCuil])
 
   const effectiveDocCount = queryMode === 'manual' ? (manualIdValid ? 1 : 0) : cuils.length
@@ -364,7 +374,7 @@ export function PayrollPage() {
       if (docs.length === 0) return
 
       const manualDocFolder =
-        queryMode === 'manual' ? manualCuil.trim().replace(/\D/g, '') : ''
+        queryMode === 'manual' ? manualCuil.trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase() : ''
 
       const zip = new JSZip()
       let added = 0
@@ -402,8 +412,8 @@ export function PayrollPage() {
       const nextZipName =
         queryMode === 'manual'
           ? (() => {
-              const id = manualCuil.trim().replace(/\D/g, '')
-              return id ? `haberes-${id}.zip` : 'haberes-manual.zip'
+              const normalized = manualCuil.trim().replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+              return normalized ? `haberes-${normalized}.zip` : 'haberes-manual.zip'
             })()
           : groupMode === 'agent'
             ? 'haberes-por-agente.zip'
@@ -518,23 +528,22 @@ export function PayrollPage() {
                       <div className="mt-1">
                         <Input
                           value={manualCuil}
-                          inputMode="numeric"
-                          pattern="\d*"
+                          inputMode="text"
                           maxLength={11}
                           onChange={(e) => {
-                            const next = e.target.value.replace(/[^\d]/g, '')
+                            const next = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
                             dispatch({ type: 'SET_MANUAL_CUIL', payload: next })
                           }}
-                          placeholder="Ingresá un único CUIL (11) o DNI (8)…"
+                          placeholder="Ingresá un único CUIL (11) o DNI (8, alfanumérico)…"
                         />
                       </div>
                       <p className="mt-1 text-xs text-on-surface-variant">
                         {manualCuil.trim().length === 0 ? (
-                          <>Ingresá un único valor (solo números).</>
+                          <>Ingresá un único valor (solo letras y números).</>
                         ) : manualIdValid ? (
                           <>CUIL/DNI válido.</>
                         ) : (
-                          <>Debe tener 8 (DNI) o 11 (CUIL) dígitos.</>
+                          <>Debe tener 8 caracteres alfanuméricos (DNI) o 11 dígitos (CUIL).</>
                         )}
                       </p>
                     </div>
@@ -795,7 +804,8 @@ export function PayrollPage() {
           <PdfPreviewModal
             doc={preview.doc}
             filename={pdfFilename(preview)}
-            metaLabel={`Agente ${preview.cuil} – Período ${preview.periodo}`}
+            metaLabel={`Documento/Agente ${preview.cuil} – Período ${preview.periodo}`}
+            agentPositionLabel={previewAgentPositionLabel ?? undefined}
             onClose={() => setPdfOpen(false)}
             onPrev={handlePrevPeriodInAgent}
             onNext={handleNextPeriodInAgent}

@@ -34,6 +34,17 @@ describe('parseSercopeCsvTextDetailed', () => {
     expect(res.rows[0]?.documento).toBe('20123456783')
   })
 
+  it('acepta DNI alfanumérico en Documento', () => {
+    const csv = `Documento,PeriodoDesde,PeriodoHasta,Secuencia
+f1234567,202401,202401,1
+`
+
+    const res = parseSercopeCsvTextDetailed(csv, '202412')
+    expect(res.report.valid).toBe(1)
+    expect(res.documentos).toEqual(['F1234567'])
+    expect(res.rows[0]?.documento).toBe('F1234567')
+  })
+
   it('rechaza rangos inválidos y períodos futuros', () => {
     const csv = `12345678,202501,202412,001
 12345678,202401,202501,001

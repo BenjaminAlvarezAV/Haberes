@@ -8,6 +8,7 @@ export function PdfPreviewModal({
   doc,
   filename,
   metaLabel,
+  agentPositionLabel,
   onClose,
   onPrev,
   onNext,
@@ -22,6 +23,7 @@ export function PdfPreviewModal({
   doc: TDocumentDefinitions
   filename: string
   metaLabel?: string
+  agentPositionLabel?: string
   onClose: () => void
   onPrev?: () => void
   onNext?: () => void
@@ -99,6 +101,9 @@ export function PdfPreviewModal({
             {(onPrevAgent || onNextAgent) && (
               <div className="flex items-center gap-1 rounded-md bg-surface-tonal px-2 py-1 ring-1 ring-outline-variant">
                 <span className="text-on-surface-variant">Agente</span>
+                {agentPositionLabel ? (
+                  <span className="min-w-10 text-center text-on-surface">{agentPositionLabel}</span>
+                ) : null}
                 <Button
                   type="button"
                   variant="secondary"

@@ -23,7 +23,7 @@ export interface PayrollState {
   batchUseManualPeriods: boolean
   /** Modo de consulta luego de cargar el CSV. */
   queryMode: QueryMode
-  /** Entrada manual: un único CUIL/DNI (solo dígitos, sin guiones). */
+  /** Entrada manual: un único CUIL (11 dígitos) o DNI alfanumérico (8). */
   manualCuil: string
   /** Entrada manual: mes específico (YYYY-MM). */
   manualMonth: string
