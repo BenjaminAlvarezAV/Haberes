@@ -363,12 +363,26 @@ const boxedLayoutCaract = {
   paddingBottom: () => 1,
 }
 
-// Layout específico para "Nombre del establecimiento":
-// agregamos altura interna sin “partir” el cuadro con una línea horizontal visible.
-// En una tabla de 3 filas, ocultamos la línea entre la fila 2 y 3 (i === 2).
-const boxedLayoutCaractName = {
+const boxedLayoutNoPadding = {
+  ...boxedLayout,
+  paddingLeft: () => 0,
+  paddingRight: () => 0,
+  paddingTop: () => 0,
+  paddingBottom: () => 0,
+}
+
+const boxedLayoutCaractNoTopNoSides = {
   ...boxedLayoutCaract,
-  hLineWidth: (i: number) => (i === 2 ? 0 : 0.8),
+  hLineWidth: (i: number) => (i === 0 ? 0 : 0.8),
+  // Solo quitamos bordes externos: izq de CAT y der de TUR.
+  vLineWidth: (i: number) => (i === 0 || i === 6 ? 0 : 0.8),
+}
+
+const boxedLayoutNameMiddleDivider = {
+  ...boxedLayoutCaract,
+  // Solo la línea entre "NOMBRE DEL ESTABLECIMIENTO" y su dato.
+  hLineWidth: (i: number) => (i === 1 ? 0.8 : 0),
+  vLineWidth: () => 0,
 }
 
 function sectionLabel(text: string): TableCell {
@@ -651,7 +665,6 @@ function buildReceiptPage({
                       ],
                     },
                     layout: separatorOnlyRowLayout,
-                    margin: [-BOXED_CELL_PADDING_X, 0, -BOXED_CELL_PADDING_X, 0],
                   },
                   {
                     table: {
@@ -674,12 +687,12 @@ function buildReceiptPage({
                           {},
                         ],
                         [
-                          cell('CAT.', 'thCaract', { alignment: 'center' }),
-                          cell('DESFAV.', 'thCaract', { alignment: 'center' }),
-                          cell('SECC.', 'thCaract', { alignment: 'center' }),
-                          cell('E.CARCEL', 'thCaract', { alignment: 'center' }),
-                          cell('DBL ESC.', 'thCaract', { alignment: 'center' }),
-                          cell('TUR.', 'thCaract', { alignment: 'center' }),
+                          cell('CATEGORIA', 'thCaract', { alignment: 'center' }),
+                          cell('DESFAVORABILIDAD', 'thCaract', { alignment: 'center' }),
+                          cell('SECCIONES', 'thCaract', { alignment: 'center' }),
+                          cell('ES CARCEL', 'thCaract', { alignment: 'center' }),
+                          cell('DOBLE ESCOL', 'thCaract', { alignment: 'center' }),
+                          cell('TURNOS', 'thCaract', { alignment: 'center' }),
                         ],
                         [
                           cell(caract[0], 'tdCaract', { alignment: 'center' }),
@@ -691,7 +704,7 @@ function buildReceiptPage({
                         ],
                       ],
                     },
-                    layout: boxedLayoutCaract,
+                    layout: boxedLayoutCaractNoTopNoSides,
                   },
                   {
                     table: {
@@ -705,15 +718,16 @@ function buildReceiptPage({
                             fillColor: RECEIPT_SECTION_HEADER_FILL,
                           },
                         ],
-                        [cell(nombreEstab, 'tdCaract', { margin: [0, 2, 0, 2] })],
+                        // Expandimos la altura del dato sin agregar una fila vacía visible.
+                        [cell(nombreEstab, 'tdCaract', { margin: [0, 2, 0, 14] })],
                       ],
                     },
-                    layout: boxedLayoutCaractName,
+                    layout: boxedLayoutNameMiddleDivider,
                   },
                 ],
               ],
             },
-            layout: boxedLayout,
+            layout: boxedLayoutNoPadding,
             ...(marginTop > 0 ? { margin: [0, marginTop, 0, 0] } : {}),
           })
 
@@ -822,14 +836,16 @@ function buildReceiptPage({
           const conceptosBlock = boxedBlock(conceptosInner, 10)
 
           return [
+            // Mantenemos juntos encabezado + fila de secuencia para legibilidad,
+            // pero permitimos que conceptos se ubique en la página siguiente si hace falta.
             {
               stack: [
                 caracteristicasYsecuenciaTop as unknown as Content,
                 filaSecuenciaLiquidacion as unknown as Content,
-                conceptosBlock,
               ],
               unbreakable: true,
             } as Content,
+            conceptosBlock,
           ]
         })
       : [
