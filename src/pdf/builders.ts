@@ -70,16 +70,26 @@ function sumLiquid(rows: LiquidPorEstablecimientoItem[]): number {
   return rows.reduce((acc, r) => acc + (r.liquido ?? 0), 0)
 }
 
-function groupCodes(items: LiquidacionPorSecuenciaItem[]): Array<{ codigo: string; desc: string; amount: number }> {
-  const map = new Map<string, { codigo: string; desc: string; amount: number }>()
+function groupCodes(
+  items: LiquidacionPorSecuenciaItem[],
+): Array<{ codigo: string; desc: string; haberes: number; descuentos: number }> {
+  const map = new Map<string, { codigo: string; desc: string; haberes: number; descuentos: number }>()
   for (const it of items) {
-    const codigo = it.codigo ?? ''
+    const codigo = (it.codigo ?? '').trim()
     const desc = it.descripcionCodigo ?? 'Sin descripción'
     const amount = it.pesos ?? 0
+    const esDeno = String(it.esDeno ?? '').trim()
+    const isDescuentoCode = codigo.startsWith('9') || codigo.startsWith('1')
+    const haberes = esDeno === '0' && !isDescuentoCode ? amount : 0
+    const descuentos = esDeno === '0' && isDescuentoCode ? Math.abs(amount) : 0
     const key = `${codigo}||${desc}`
     const prev = map.get(key)
-    if (prev) prev.amount += amount
-    else map.set(key, { codigo, desc, amount })
+    if (prev) {
+      prev.haberes += haberes
+      prev.descuentos += descuentos
+    } else {
+      map.set(key, { codigo, desc, haberes, descuentos })
+    }
   }
   return Array.from(map.values()).sort((a, b) => a.codigo.localeCompare(b.codigo))
 }
@@ -92,6 +102,28 @@ function esCarcelFromCcticas(value: string | null): 'S' | 'N' {
 function dobleEscolFromCcticas(value: string | null): 'S' | 'N' {
   if (!value) return 'N'
   return String(value).toUpperCase().includes('C') ? 'S' : 'N'
+}
+
+function revistaAlias(value: string | null): string {
+  const v = String(value ?? '')
+    .trim()
+    .toUpperCase()
+  if (!v) return 'OTRO'
+  if (v === 'T') return 'TIT'
+  if (v === 'P') return 'PROV'
+  if (v === 'S') return 'SUP'
+  if (v === 'R') return 'REEMP'
+  if (v === 'M') return 'MENS'
+  if (v === 'D') return 'DEST'
+  if (v === 'E') return 'SIN EST'
+  return 'OTRO'
+}
+
+function haberesHeaderTitle(items: LiquidacionPorSecuenciaItem[]): string {
+  const dipregep = items.some((it) => String(it.esDeno ?? '').trim() === '1')
+  return dipregep
+    ? 'Recuerde que el recibo de haberes correspondiente a DIPREGEP debe retirarlo del Establecimiento'
+    : 'HABERES'
 }
 
 const separatorOnlyRowLayout = {
@@ -273,11 +305,11 @@ function groupBySecuencia(
           dobleEscol: dobleEscolFromCcticas(it.ccticas),
           turnos: (it.turnos ?? '').trim() || '—',
           secuencia: secu || '—',
-          revista: rev || '—',
+          revista: revistaAlias(rev),
           cargoReal: (it.cat ?? '').trim() || '',
           choraria: formatHsDisplay(it.choraria),
           apoyoReal: (it.apoyoReal ?? '').trim() || '',
-          cargoInt: (it.cargoInt ?? '').trim() || '',
+          cargoInt: (it.catInt ?? '').trim() || '',
           apoyoInt: (it.apoyoInt ?? '').trim() || '',
           periodoLiqSix: periodoLiqSix || yyyymm(fallbackPeriodo),
           ordenPagoPadded: '—',
@@ -797,7 +829,7 @@ function buildReceiptPage({
                   body: [
                     [
                       {
-                        text: 'HABERES',
+                        text: haberesHeaderTitle(g.items),
                         style: 'sectionBox',
                         colSpan: 4,
                         alignment: 'center',
@@ -813,12 +845,14 @@ function buildReceiptPage({
                       cell('Haberes', 'thSmall', { alignment: 'right' }),
                       cell('Descuentos', 'thSmall', { alignment: 'right' }),
                     ],
-                    ...groupCodes(g.items).map((c) => [
-                      cell(c.codigo || '', 'td'),
-                      cell((c.desc ?? '').trim(), 'td'),
-                      cell(c.amount >= 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
-                      cell(c.amount < 0 ? pesos(c.amount) : '', 'td', { alignment: 'right' }),
-                    ]),
+                    ...groupCodes(g.items)
+                      .filter((c) => c.haberes !== 0 || c.descuentos !== 0)
+                      .map((c) => [
+                        cell(c.codigo || '', 'td'),
+                        cell((c.desc ?? '').trim(), 'td'),
+                        cell(c.haberes !== 0 ? pesos(c.haberes) : '', 'td', { alignment: 'right' }),
+                        cell(c.descuentos !== 0 ? pesos(c.descuentos) : '', 'td', { alignment: 'right' }),
+                      ]),
                   ],
                 },
                 layout: {
@@ -827,7 +861,7 @@ function buildReceiptPage({
                 },
               },
               {
-                text: `ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}     RURAL ARTICULACION: ${g.meta.desfavorabilidad}     DIAS TRABAJADOS: —     INASISTENCIAS: ${g.meta.inasistencias}`,
+                text: `ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}     RURAL ARTICULACION:      DIAS TRABAJADOS: —     INASISTENCIAS: ${g.meta.inasistencias}`,
                 style: 'tdTiny',
                 margin: [0, 6, 0, 0],
               },

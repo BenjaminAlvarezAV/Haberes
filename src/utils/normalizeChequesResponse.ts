@@ -112,6 +112,7 @@ export function normalizeLiquidacionPorSecuencia(raw: unknown): LiquidacionPorSe
       turnosInt: pickFirst(o, ['turnosInt'], toString),
       dobEscolEstab: pickFirst(o, ['dobEscolEstab', 'dobEscol', 'dobEscolInt'], toString),
       esCarcel: pickFirst(o, ['esCarcel', 'esDeno', 'carcel', 'establecimientoCarcelario'], toString),
+      esDeno: pickFirst(o, ['esDeno', 'esdeno', 'isdeno'], toString),
       direccion: pickFirst(
         o,
         ['direccion', 'direccionEstab', 'dirEstab', 'direccionEstablecimiento', 'direccionEstabInt'],

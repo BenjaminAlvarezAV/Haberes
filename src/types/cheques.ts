@@ -51,6 +51,7 @@ export interface LiquidacionPorSecuenciaItem {
   turnosInt: string | null
   dobEscolEstab: string | null
   esCarcel: string | null
+  esDeno?: string | null
   direccion: string | null
   cargoReal: string | null
   choraria: string | null
