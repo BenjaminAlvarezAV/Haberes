@@ -373,7 +373,8 @@ const boxedLayoutNoPadding = {
 
 const boxedLayoutCaractNoTopNoSides = {
   ...boxedLayoutCaract,
-  hLineWidth: (i: number) => (i === 0 ? 0 : 0.8),
+  // El borde inferior lo dibuja la tabla contenedora; acá dejamos solo divisores internos.
+  hLineWidth: (i: number) => (i === 1 || i === 2 ? 0.8 : 0),
   // Solo quitamos bordes externos: izq de CAT y der de TUR.
   vLineWidth: (i: number) => (i === 0 || i === 6 ? 0 : 0.8),
 }
@@ -718,8 +719,8 @@ function buildReceiptPage({
                             fillColor: RECEIPT_SECTION_HEADER_FILL,
                           },
                         ],
-                        // Expandimos la altura del dato sin agregar una fila vacía visible.
-                        [cell(nombreEstab, 'tdCaract', { margin: [0, 2, 0, 14] })],
+                        // Evitamos estirar toda la fila exterior para que no aparezca hueco en "CARACTERISTICAS".
+                        [cell(nombreEstab, 'tdCaract', { margin: [0, 2, 0, 2] })],
                       ],
                     },
                     layout: boxedLayoutNameMiddleDivider,
