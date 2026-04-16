@@ -861,7 +861,13 @@ function buildReceiptPage({
                 },
               },
               {
-                text: `ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}     RURAL ARTICULACION:      DIAS TRABAJADOS: —     INASISTENCIAS: ${g.meta.inasistencias}`,
+                columns: [
+                  { text: `ANTIGUEDAD EN AÑOS: ${g.meta.antiguedad}`, width: 'auto' },
+                  { text: 'RURAL ARTICULACION:', width: 'auto' },
+                  { text: 'DIAS TRABAJADOS:', width: 'auto' },
+                  { text: `INASISTENCIAS: ${g.meta.inasistencias}`, width: 'auto' },
+                ],
+                columnGap: 18,
                 style: 'tdTiny',
                 margin: [0, 6, 0, 0],
               },
@@ -921,6 +927,8 @@ function buildReceiptPage({
         ...(cheques?.mensajeria?.mensajeGeneral ?? []),
         ...(cheques?.mensajeria?.mensajesPersonalizados ?? []),
       ]
+        .map((message) => String(message ?? '').trimEnd())
+        .filter((message) => message.length > 0)
     : []
 
   const legalInline: Content[] = inlineMessages.length
