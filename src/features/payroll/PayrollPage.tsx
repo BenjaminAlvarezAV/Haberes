@@ -35,6 +35,13 @@ function pdfFilename(pdf: PdfEntry): string {
   return `haberes-${pdf.cuil}-${pdf.periodo}.pdf`
 }
 
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
 const PDF_TIMEOUT_MS = 60000
 
 async function createPdfBase64WithTimeout(doc: PdfEntry['doc'], ms: number): Promise<string> {
@@ -86,6 +93,12 @@ export function PayrollPage() {
   )
   const [zipSkipped, setZipSkipped] = useState<string[]>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
+  const [consultStartedAt, setConsultStartedAt] = useState<number | null>(null)
+  const [consultElapsedMs, setConsultElapsedMs] = useState(0)
+  const [lastConsultDurationMs, setLastConsultDurationMs] = useState<number | null>(null)
+  const [zipStartedAt, setZipStartedAt] = useState<number | null>(null)
+  const [zipElapsedMs, setZipElapsedMs] = useState(0)
+  const [lastZipDurationMs, setLastZipDurationMs] = useState<number | null>(null)
 
   const normalizedAgentSearch = useMemo(() => agentSearch.trim().toLowerCase(), [agentSearch])
   const normalizedPeriodSearch = useMemo(() => {
@@ -313,6 +326,48 @@ export function PayrollPage() {
   }, [queryMode, groupMode, dispatch])
 
   useEffect(() => {
+    if (loading) {
+      setConsultStartedAt((prev) => prev ?? Date.now())
+      return
+    }
+    if (consultStartedAt !== null) {
+      const duration = Date.now() - consultStartedAt
+      setConsultElapsedMs(duration)
+      setLastConsultDurationMs(duration)
+      setConsultStartedAt(null)
+    }
+  }, [loading, consultStartedAt])
+
+  useEffect(() => {
+    if (!loading || consultStartedAt === null) return
+    const tick = () => setConsultElapsedMs(Date.now() - consultStartedAt)
+    tick()
+    const timer = window.setInterval(tick, 250)
+    return () => window.clearInterval(timer)
+  }, [loading, consultStartedAt])
+
+  useEffect(() => {
+    if (downloadingZip) {
+      setZipStartedAt((prev) => prev ?? Date.now())
+      return
+    }
+    if (zipStartedAt !== null) {
+      const duration = Date.now() - zipStartedAt
+      setZipElapsedMs(duration)
+      setLastZipDurationMs(duration)
+      setZipStartedAt(null)
+    }
+  }, [downloadingZip, zipStartedAt])
+
+  useEffect(() => {
+    if (!downloadingZip || zipStartedAt === null) return
+    const tick = () => setZipElapsedMs(Date.now() - zipStartedAt)
+    tick()
+    const timer = window.setInterval(tick, 250)
+    return () => window.clearInterval(timer)
+  }, [downloadingZip, zipStartedAt])
+
+  useEffect(() => {
     if (queryMode === 'manual') {
       setAgentSearch('')
     }
@@ -496,7 +551,7 @@ export function PayrollPage() {
                     {batchUseManualPeriods ? (
                       <PeriodSelector
                         value={periodos}
-                        available={availablePeriodos}
+                        available={[]}
                         onChange={(next) => dispatch({ type: 'SET_PERIODOS', payload: next })}
                       />
                     ) : null}
@@ -547,6 +602,15 @@ export function PayrollPage() {
                   <span className="font-medium">{effectiveDocCount}</span> documentos{' '}
                   <span className="font-medium">{effectivePeriodCount}</span> período(s)
                 </div>
+                {loading ? (
+                  <div className="text-xs text-on-surface-variant">
+                    Tiempo consulta: <span className="font-medium">{formatElapsed(consultElapsedMs)}</span>
+                  </div>
+                ) : lastConsultDurationMs !== null ? (
+                  <div className="text-xs text-on-surface-variant">
+                    Última consulta: <span className="font-medium">{formatElapsed(lastConsultDurationMs)}</span>
+                  </div>
+                ) : null}
               </div>
               {loading && fetchProgress ? (
                 <p className="text-xs text-on-surface-variant">
@@ -739,7 +803,13 @@ export function PayrollPage() {
               </div>
               {zipProgress ? (
                 <p className="text-xs text-on-surface-variant">
-                  Generando ZIP: {zipProgress.current}/{zipProgress.total} — {zipProgress.label}
+                  Generando ZIP: {zipProgress.current}/{zipProgress.total} — {zipProgress.label} · Tiempo:{' '}
+                  <span className="font-medium">{formatElapsed(zipElapsedMs)}</span>
+                </p>
+              ) : null}
+              {!downloadingZip && lastZipDurationMs !== null ? (
+                <p className="text-xs text-on-surface-variant">
+                  Última generación ZIP: <span className="font-medium">{formatElapsed(lastZipDurationMs)}</span>
                 </p>
               ) : null}
               {downloadError ? (

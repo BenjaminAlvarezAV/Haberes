@@ -936,7 +936,6 @@ function buildReceiptPage({
         boxedBlock(
           {
             stack: [
-              { text: 'MENSAJERIA', style: 'sectionBox', margin: [0, 0, 0, 4] },
               { text: inlineMessages.join('\n\n'), style: 'legalInline', margin: [0, 0, 0, 0] },
             ],
           },
