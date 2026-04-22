@@ -42,6 +42,6 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
-  // Dar margen para descargas grandes (ZIP), evitando revocar el URL demasiado pronto.
-  setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  // Liberamos antes para no retener memoria entre descargas consecutivas.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }

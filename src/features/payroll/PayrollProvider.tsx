@@ -8,7 +8,7 @@ import {
 import { toAppError } from '../../services/apiClient'
 import { PayrollContext, validationError, type PayrollContextValue } from './PayrollContext'
 import { payrollReducer, initialPayrollState } from './payrollReducer'
-import { currentPeriod, expandYYYYMMRange, isFuturePeriod } from '../../utils/period'
+import { currentPeriod, expandYYYYMMRange, isFuturePeriod, yyyymmToPeriod } from '../../utils/period'
 import { normalizeCuil } from '../../utils/cuil'
 import {
   type SecuenciaFilterSpec,
@@ -24,6 +24,7 @@ import { mapLimit } from '../../utils/promise'
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
+  const ON_DEMAND_PAIR_THRESHOLD = 100
 
   const consult = useCallback(async () => {
     const normalizeDocumentoInput = (raw: string): string => {
@@ -338,6 +339,30 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
                   })
                 })
                 .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
+
+      if (pairs.length > ON_DEMAND_PAIR_THRESHOLD) {
+        const lightweightItems: PayrollItem[] = pairs.map((p) => ({
+          cuil: originalDocByApiId.get(p.id) ?? p.id,
+          periodo: yyyymmToPeriod(p.periodoYYYYMM),
+          concepto: 'Consulta diferida (on-demand)',
+          importe: 0,
+        }))
+        const uniqueCuils = Array.from(new Set(lightweightItems.map((i) => i.cuil))).sort()
+        const lightweightData: NormalizedPayroll = {
+          items: lightweightItems,
+          agents: uniqueCuils.map((cuil) => ({ cuil })),
+          ...(rawErrors.length > 0
+            ? {
+                errors: rawErrors.map((e) => ({
+                  cuil: originalDocByApiId.get(e.cuil) ?? e.cuil,
+                  message: e.message,
+                })),
+              }
+            : {}),
+        }
+        dispatch({ type: 'FETCH_SUCCESS', payload: lightweightData })
+        return
+      }
 
       dispatch({
         type: 'SET_FETCH_PROGRESS',

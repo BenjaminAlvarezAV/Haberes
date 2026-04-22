@@ -19,6 +19,13 @@ export function PdfPreviewModal({
   hasPrevAgent = false,
   hasNextAgent = false,
   onSearch,
+  currentAgent,
+  currentPeriod,
+  agentOptions = [],
+  periodOptions = [],
+  onSelectAgent,
+  onSelectPeriod,
+  selectingDisabled = false,
 }: {
   doc: TDocumentDefinitions
   filename: string
@@ -34,6 +41,13 @@ export function PdfPreviewModal({
   hasPrevAgent?: boolean
   hasNextAgent?: boolean
   onSearch?: (query: string) => void
+  currentAgent?: string
+  currentPeriod?: string
+  agentOptions?: string[]
+  periodOptions?: string[]
+  onSelectAgent?: (cuil: string) => void
+  onSelectPeriod?: (periodo: string) => void
+  selectingDisabled?: boolean
 }) {
   const [url, setUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -94,6 +108,44 @@ export function PdfPreviewModal({
                 >
                   Ir
                 </Button>
+              </div>
+            ) : null}
+            {(onSelectAgent || onSelectPeriod) && (agentOptions.length > 0 || periodOptions.length > 0) ? (
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                {onSelectAgent && agentOptions.length > 0 ? (
+                  <label className="flex items-center gap-1 text-xs text-on-surface-variant">
+                    <span>Agente</span>
+                    <select
+                      className="h-7 rounded-md border border-outline-variant bg-input-bg px-2 text-xs text-on-surface focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
+                      value={currentAgent ?? ''}
+                      disabled={selectingDisabled}
+                      onChange={(e) => onSelectAgent(e.target.value)}
+                    >
+                      {agentOptions.map((cuil) => (
+                        <option key={cuil} value={cuil}>
+                          {cuil}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                {onSelectPeriod && periodOptions.length > 0 ? (
+                  <label className="flex items-center gap-1 text-xs text-on-surface-variant">
+                    <span>Período</span>
+                    <select
+                      className="h-7 rounded-md border border-outline-variant bg-input-bg px-2 text-xs text-on-surface focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
+                      value={currentPeriod ?? ''}
+                      disabled={selectingDisabled}
+                      onChange={(e) => onSelectPeriod(e.target.value)}
+                    >
+                      {periodOptions.map((periodo) => (
+                        <option key={periodo} value={periodo}>
+                          {periodo}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
             ) : null}
           </div>
