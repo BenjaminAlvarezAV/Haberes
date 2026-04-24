@@ -24,9 +24,78 @@ import { mapLimit } from '../../utils/promise'
 
 export function PayrollProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(payrollReducer, initialPayrollState)
-  const ON_DEMAND_PAIR_THRESHOLD = 100
+  // Modo base del proyecto: consulta diferida (on-demand) para todos los volúmenes.
+  const ON_DEMAND_PAIR_THRESHOLD = 0
 
   const consult = useCallback(async () => {
+    const hasText = (value: string | null | undefined): boolean =>
+      typeof value === 'string' && value.trim().length > 0
+    const hasValue = (value: string | number | null | undefined): boolean => {
+      if (typeof value === 'number') return Number.isFinite(value)
+      return hasText(typeof value === 'string' ? value : null)
+    }
+    const hasAnyMeaningfulSecuenciaRow = (bundle: ChequesBundle): boolean => {
+      return bundle.liquidacionPorSecuencia.some(
+        (row) =>
+          row.pesos !== null ||
+          hasText(row.codigo) ||
+          hasText(row.descripcionCodigo) ||
+          hasText(row.apYNom) ||
+          hasText(row.numDoc) ||
+          hasText(row.sexo) ||
+          hasText(row.cuitCuil) ||
+          hasText(row.mesaPago) ||
+          hasText(row.tipoOrg) ||
+          hasText(row.numero) ||
+          hasText(row.nombreEstab) ||
+          hasText(row.tipoOrgInt) ||
+          hasText(row.numeroInt) ||
+          hasText(row.nombreEstabInt) ||
+          hasText(row.secu) ||
+          hasText(row.rev) ||
+          hasText(row.estabPag) ||
+          hasText(row.distritoInt) ||
+          hasText(row.ccticas) ||
+          hasText(row.ccticasInt) ||
+          hasText(row.nomDistInt) ||
+          hasText(row.cat) ||
+          hasText(row.catInt) ||
+          hasText(row.rural) ||
+          hasText(row.ruralInt) ||
+          hasText(row.secciones) ||
+          hasText(row.seccionesInt) ||
+          hasText(row.turnos) ||
+          hasText(row.turnosInt) ||
+          hasText(row.dobEscolEstab) ||
+          hasText(row.esCarcel) ||
+          hasText(row.esDeno) ||
+          hasText(row.direccion) ||
+          hasText(row.cargoReal) ||
+          hasText(row.choraria) ||
+          hasText(row.apoyoReal) ||
+          hasText(row.cargoInt) ||
+          hasText(row.apoyoInt) ||
+          hasText(row.antig) ||
+          hasText(row.inas) ||
+          hasText(row.oPid) ||
+          hasText(row.fecAfec),
+      )
+    }
+    const hasAnyMeaningfulEstabRow = (bundle: ChequesBundle): boolean => {
+      return bundle.liquidPorEstablecimiento.some(
+        (row) =>
+          row.distrito !== null ||
+          hasText(row.tipoOrg) ||
+          row.liquido !== null ||
+          hasValue(row.numero) ||
+          hasText(row.nombreEstab) ||
+          hasValue(row.secu) ||
+          hasText(row.perOpago) ||
+          hasText(row.nombreOpago) ||
+          hasText(row.fecPago),
+      ) || bundle.liquidPorEstablecimiento.some((row) => hasValue(row.opid))
+    }
+
     const normalizeDocumentoInput = (raw: string): string => {
       return raw.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
     }
@@ -207,7 +276,10 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       const probePeriodoYYYYMM = probePeriodo.replace('-', '')
 
       const idsToValidate = uniqueRequestedIds.filter((id) => expectedCuilsByRequestedId.has(id))
-      if (idsToValidate.length > 0 && /^\d{6}$/.test(probePeriodoYYYYMM)) {
+      // En modo lote/on-demand evitamos esta validación previa para no bloquear la consulta inicial
+      // con una ronda extra de requests. Manual mantiene validación temprana por precisión.
+      const shouldRunProbeValidation = state.queryMode === 'manual'
+      if (shouldRunProbeValidation && idsToValidate.length > 0 && /^\d{6}$/.test(probePeriodoYYYYMM)) {
         dispatch({
           type: 'SET_FETCH_PROGRESS',
           payload: { label: 'Validando CUIL/DNI…', current: 0, total: idsToValidate.length },
@@ -396,11 +468,28 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
       Object.values(chequesMap).forEach((bundle) => {
         const periodo = `${bundle.periodoYYYYMM.slice(0, 4)}-${bundle.periodoYYYYMM.slice(4, 6)}`
+        const hasMeaningfulSecuencia = hasAnyMeaningfulSecuenciaRow(bundle)
+        const hasMeaningfulEstab = hasAnyMeaningfulEstabRow(bundle)
 
         // Registrar período consultado para este documento.
         const totalSet = totalPeriodsByCuil.get(bundle.id) ?? new Set<string>()
         totalSet.add(periodo)
         totalPeriodsByCuil.set(bundle.id, totalSet)
+
+        // Si los 3 endpoints devuelven estructuras vacías/en blanco, lo marcamos explícitamente.
+        // Evita "éxitos silenciosos" cuando en realidad el backend respondió sin contenido útil.
+        if (
+          !hasMeaningfulSecuencia &&
+          !hasMeaningfulEstab &&
+          (!bundle.errors || bundle.errors.length === 0)
+        ) {
+          registerError(
+            bundle.id,
+            periodo,
+            `La consulta devolvió todos los campos vacíos para el período ${periodo}. Revisá permisos/conectividad (por ejemplo VPN) e intentá nuevamente.`,
+          )
+          return
+        }
 
         // a) Detalle por secuencia: un item por código (usa "pesos" y "descripcionCodigo").
         let hasNonZeroDetail = false

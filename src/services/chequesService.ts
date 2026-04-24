@@ -60,11 +60,17 @@ async function fetchWithRetries<T>(
   return null
 }
 
-export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Promise<ChequesBundle> {
+export async function fetchChequesBundle(
+  id: string,
+  periodoYYYYMM: string,
+  options?: { includeMensajeria?: boolean; attempts?: number },
+): Promise<ChequesBundle> {
+  const includeMensajeria = options?.includeMensajeria ?? true
+  const attempts = options?.attempts ?? 3
   const errors: string[] = []
   logDevRequest('liquidPorEstablecimiento', id, periodoYYYYMM)
   logDevRequest('liquidacionPorSecuencia', id, periodoYYYYMM)
-  logDevRequest('mensajeria', id, periodoYYYYMM)
+  if (includeMensajeria) logDevRequest('mensajeria', id, periodoYYYYMM)
 
   const [estab, secu, msg] = await Promise.all([
     fetchWithRetries(
@@ -74,6 +80,7 @@ export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Pro
           .then((r) => normalizeLiquidPorEstablecimiento(r.data)),
       'liquidPorEstablecimiento',
       errors,
+      attempts,
     ).then((res) => res ?? []),
     fetchWithRetries(
       () =>
@@ -82,21 +89,28 @@ export async function fetchChequesBundle(id: string, periodoYYYYMM: string): Pro
           .then((r) => normalizeLiquidacionPorSecuencia(r.data)),
       'liquidacionPorSecuencia',
       errors,
+      attempts,
     ).then((res) => res ?? []),
-    fetchWithRetries(
-      () =>
-        chequesClient
-          .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
-          .then((r) => normalizeMensajeria(r.data)),
-      'mensajeria',
-      errors,
-    ).then(
-      (res) =>
-        res ?? {
+    includeMensajeria
+      ? fetchWithRetries(
+          () =>
+            chequesClient
+              .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
+              .then((r) => normalizeMensajeria(r.data)),
+          'mensajeria',
+          errors,
+          attempts,
+        ).then(
+          (res) =>
+            res ?? {
+              mensajeGeneral: [],
+              mensajesPersonalizados: [],
+            },
+        )
+      : Promise.resolve({
           mensajeGeneral: [],
           mensajesPersonalizados: [],
-        },
-    ),
+        }),
   ])
 
   return {

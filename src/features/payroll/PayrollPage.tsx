@@ -23,7 +23,7 @@ import {
 } from '../../utils/chequesSecuenciaFilter'
 import { ThemeToggle } from '../../theme/ThemeToggle'
 import type { ChequesBundle } from '../../types/cheques'
-import type { PayrollItem } from '../../types/payroll'
+import type { NormalizedPayroll, PayrollItem } from '../../types/payroll'
 
 type PdfEntry = AgentPeriodPdf
 type PdfTarget = { cuil: string; periodo: string }
@@ -45,6 +45,77 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function hasText(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function hasValue(value: string | number | null | undefined): boolean {
+  if (typeof value === 'number') return Number.isFinite(value)
+  return hasText(typeof value === 'string' ? value : null)
+}
+
+function bundleHasMeaningfulData(bundle: ChequesBundle): boolean {
+  const hasSecuencia = bundle.liquidacionPorSecuencia.some(
+    (row) =>
+      row.pesos !== null ||
+      hasText(row.codigo) ||
+      hasText(row.descripcionCodigo) ||
+      hasText(row.apYNom) ||
+      hasText(row.numDoc) ||
+      hasText(row.sexo) ||
+      hasText(row.cuitCuil) ||
+      hasText(row.mesaPago) ||
+      hasText(row.tipoOrg) ||
+      hasText(row.numero) ||
+      hasText(row.nombreEstab) ||
+      hasText(row.tipoOrgInt) ||
+      hasText(row.numeroInt) ||
+      hasText(row.nombreEstabInt) ||
+      hasText(row.secu) ||
+      hasText(row.rev) ||
+      hasText(row.estabPag) ||
+      hasText(row.distritoInt) ||
+      hasText(row.ccticas) ||
+      hasText(row.ccticasInt) ||
+      hasText(row.nomDistInt) ||
+      hasText(row.cat) ||
+      hasText(row.catInt) ||
+      hasText(row.rural) ||
+      hasText(row.ruralInt) ||
+      hasText(row.secciones) ||
+      hasText(row.seccionesInt) ||
+      hasText(row.turnos) ||
+      hasText(row.turnosInt) ||
+      hasText(row.dobEscolEstab) ||
+      hasText(row.esCarcel) ||
+      hasText(row.esDeno) ||
+      hasText(row.direccion) ||
+      hasText(row.cargoReal) ||
+      hasText(row.choraria) ||
+      hasText(row.apoyoReal) ||
+      hasText(row.cargoInt) ||
+      hasText(row.apoyoInt) ||
+      hasText(row.antig) ||
+      hasText(row.inas) ||
+      hasText(row.oPid) ||
+      hasText(row.fecAfec),
+  )
+  if (hasSecuencia) return true
+
+  return bundle.liquidPorEstablecimiento.some(
+    (row) =>
+      row.distrito !== null ||
+      hasText(row.tipoOrg) ||
+      row.liquido !== null ||
+      hasValue(row.numero) ||
+      hasText(row.nombreEstab) ||
+      hasValue(row.secu) ||
+      hasText(row.perOpago) ||
+      hasText(row.nombreOpago) ||
+      hasText(row.fecPago),
+  ) || bundle.liquidPorEstablecimiento.some((row) => hasValue(row.opid))
 }
 
 function bundleToPayrollItems(bundle: ChequesBundle, visibleCuil: string): PayrollItem[] {
@@ -81,6 +152,14 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
   const observations: Array<{ cuil: string; message: string }> = []
   let hasNonZeroDetail = false
 
+  if (!bundleHasMeaningfulData(bundle) && (!bundle.errors || bundle.errors.length === 0)) {
+    observations.push({
+      cuil: visibleCuil,
+      message: `La consulta devolvió todos los campos vacíos para el período ${periodo}. Revisá permisos/conectividad e intentá nuevamente.`,
+    })
+    return observations
+  }
+
   bundle.liquidacionPorSecuencia.forEach((row) => {
     if (row.pesos === null || Number.isNaN(row.pesos)) {
       observations.push({
@@ -101,11 +180,20 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
   }
 
   if (bundle.errors && bundle.errors.length > 0) {
-    observations.push(
-      ...bundle.errors.map((msg) => ({
+    const forbiddenFound = bundle.errors.some(isForbiddenErrorMessage)
+    if (forbiddenFound) {
+      observations.push({
         cuil: visibleCuil,
-        message: msg,
-      })),
+        message: 'Acceso denegado (Forbidden/403). No tenemos permisos para consultar esta información.',
+      })
+    }
+    observations.push(
+      ...bundle.errors
+        .filter((msg) => (forbiddenFound ? !isForbiddenErrorMessage(msg) : true))
+        .map((msg) => ({
+          cuil: visibleCuil,
+          message: msg,
+        })),
     )
   }
 
@@ -113,9 +201,53 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
 }
 
 const PDF_TIMEOUT_MS = 60000
-const ON_DEMAND_PDF_THRESHOLD = 100
 const ZIP_DOWNLOAD_CONCURRENCY = 4
+const ZIP_FINALIZE_TIMEOUT_MS = 900000
 const TARGET_FETCH_KEY_SEP = '|'
+
+function isForbiddenErrorMessage(message: string): boolean {
+  const mm = message.toLowerCase()
+  return (
+    mm.includes('forbidden') ||
+    mm.includes('http 403') ||
+    mm.includes('status code 403') ||
+    mm.includes('403')
+  )
+}
+
+function summarizeBundleEndpointError(bundle: ChequesBundle): string | null {
+  const errors = bundle.errors ?? []
+  if (errors.length === 0) return null
+  if (errors.some(isForbiddenErrorMessage)) {
+    return 'Acceso denegado (Forbidden/403). No tenemos permisos para consultar esta información.'
+  }
+  return errors[0] ?? null
+}
+
+type ZipResultSummary = {
+  generated: number
+  skipped: number
+  forbidden: number
+  noInfo: number
+  endpointError: number
+  other: number
+}
+
+function classifySkipReason(reason: string): keyof Omit<ZipResultSummary, 'generated' | 'skipped'> {
+  const msg = reason.toLowerCase()
+  if (msg.includes('forbidden') || msg.includes('403') || msg.includes('acceso denegado')) return 'forbidden'
+  if (msg.includes('no se encontró información') || msg.includes('sin datos')) return 'noInfo'
+  if (
+    msg.includes('http ') ||
+    msg.includes('timeout') ||
+    msg.includes('status code') ||
+    msg.includes('error') ||
+    msg.includes('no se pudo consultar')
+  ) {
+    return 'endpointError'
+  }
+  return 'other'
+}
 
 async function createPdfUint8ArrayWithTimeout(doc: PdfEntry['doc'], ms: number): Promise<Uint8Array> {
   return new Promise<Uint8Array>((resolve, reject) => {
@@ -130,6 +262,31 @@ async function createPdfUint8ArrayWithTimeout(doc: PdfEntry['doc'], ms: number):
         reject(err)
       })
   })
+}
+
+async function generateZipBlobWithTimeout(
+  zip: JSZip,
+  onProgress: (percent: number) => void,
+  timeoutMs: number,
+): Promise<Blob> {
+  let timeoutId: number | null = null
+  try {
+    return (await Promise.race([
+      zip.generateAsync(
+        {
+          type: 'blob',
+          compression: 'STORE',
+          streamFiles: true,
+        },
+        (metadata) => onProgress(metadata.percent),
+      ),
+      new Promise<Blob>((_, reject) => {
+        timeoutId = window.setTimeout(() => reject(new Error('zip-timeout')), timeoutMs)
+      }),
+    ])) as Blob
+  } finally {
+    if (timeoutId !== null) window.clearTimeout(timeoutId)
+  }
 }
 
 export function PayrollPage() {
@@ -165,6 +322,7 @@ export function PayrollPage() {
     null,
   )
   const [zipSkipped, setZipSkipped] = useState<string[]>([])
+  const [zipResultSummary, setZipResultSummary] = useState<ZipResultSummary | null>(null)
   const [showErrorDetails, setShowErrorDetails] = useState(false)
   const [onDemandPreview, setOnDemandPreview] = useState<PdfEntry | null>(null)
   const [onDemandPreviewLoading, setOnDemandPreviewLoading] = useState(false)
@@ -181,19 +339,23 @@ export function PayrollPage() {
   const [zipStartedAt, setZipStartedAt] = useState<number | null>(null)
   const [zipElapsedMs, setZipElapsedMs] = useState(0)
   const [lastZipDurationMs, setLastZipDurationMs] = useState<number | null>(null)
+  const downloadingZipRef = useRef(false)
   const bundleCacheRef = useRef(new Map<string, ChequesBundle>())
   const bundleInFlightRef = useRef(new Map<string, Promise<ChequesBundle | null>>())
   const pdfCacheRef = useRef(new Map<string, PdfEntry | null>())
   const pdfInFlightRef = useRef(new Map<string, Promise<PdfEntry | null>>())
+  const pdfSkipReasonRef = useRef(new Map<string, string>())
 
   const clearHeavyCaches = useCallback(() => {
     bundleCacheRef.current.clear()
     bundleInFlightRef.current.clear()
     pdfCacheRef.current.clear()
     pdfInFlightRef.current.clear()
+    pdfSkipReasonRef.current.clear()
   }, [])
 
-  const cleanupAfterDownload = useCallback(() => {
+  const cleanupAfterDownload = useCallback((options?: { preserveObservations?: boolean }) => {
+    const preserveObservations = options?.preserveObservations ?? false
     clearHeavyCaches()
     setOnDemandPreview(null)
     setPreviewLoadError(null)
@@ -201,8 +363,10 @@ export function PayrollPage() {
     setTableOnDemandItemsByGroup({})
     setTableOnDemandLoading(false)
     setTableOnDemandError(null)
-    setOnDemandObservations([])
-    seenOnDemandObservationKeysRef.current.clear()
+    if (!preserveObservations) {
+      setOnDemandObservations([])
+      seenOnDemandObservationKeysRef.current.clear()
+    }
     setZipProgress(null)
   }, [clearHeavyCaches])
 
@@ -250,32 +414,13 @@ export function PayrollPage() {
         return a.cuil.localeCompare(b.cuil)
       })
   }, [filteredData])
-  const onDemandPdfMode = pdfTargets.length > ON_DEMAND_PDF_THRESHOLD
-  const agentPdfs = useMemo(
-    () => (filteredData && !onDemandPdfMode ? buildAgentPdfs(filteredData, chequesByKey) : []),
-    [filteredData, chequesByKey, onDemandPdfMode],
-  )
   const chequesErrorCount = useMemo(
     () => Object.values(chequesByKey).filter((bundle) => bundle.errors && bundle.errors.length > 0).length,
     [chequesByKey],
   )
-  // Vista previa: siempre 1 PDF por (agente × período), igual que al agrupar por agente.
-  // Con agrupación o filtro por período, ordenamos período → CUIL para alinear con la tabla y la paginación.
-  const eagerPreviewPdfs = useMemo(() => {
-    if (agentPdfs.length === 0) return agentPdfs
-    const periodFirst = groupMode === 'period' || Boolean(normalizedPeriodSearch)
-    if (!periodFirst) return agentPdfs
-    return [...agentPdfs].sort((a, b) => {
-      if (a.periodo !== b.periodo) return a.periodo.localeCompare(b.periodo)
-      return a.cuil.localeCompare(b.cuil)
-    })
-  }, [agentPdfs, groupMode, normalizedPeriodSearch])
-  const previewTargets = useMemo(() => {
-    if (onDemandPdfMode) return pdfTargets
-    return eagerPreviewPdfs.map((p) => ({ cuil: p.cuil, periodo: p.periodo }))
-  }, [onDemandPdfMode, pdfTargets, eagerPreviewPdfs])
+  const previewTargets = pdfTargets
   const zipPdfCount = previewTargets.length
-  const preview = onDemandPdfMode ? onDemandPreview : (eagerPreviewPdfs[previewIndex] ?? null)
+  const preview = onDemandPreview
   const previewAgentOrder = useMemo(
     () => Array.from(new Set(previewTargets.map((p) => p.cuil))),
     [previewTargets],
@@ -292,7 +437,7 @@ export function PayrollPage() {
   )
   const visibleErrors = useMemo(() => {
     const base = data?.errors ?? []
-    if (!onDemandPdfMode || onDemandObservations.length === 0) return base
+    if (onDemandObservations.length === 0) return base
     const merged = [...base]
     const seen = new Set(base.map((e) => `${e.cuil}|${e.message}`))
     onDemandObservations.forEach((e) => {
@@ -302,7 +447,7 @@ export function PayrollPage() {
       merged.push(e)
     })
     return merged
-  }, [data, onDemandPdfMode, onDemandObservations])
+  }, [data, onDemandObservations])
 
   const hasPrevPeriodInAgent = useMemo(() => {
     if (!preview) return false
@@ -327,30 +472,26 @@ export function PayrollPage() {
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
       const p = previewTargets[i]
       if (p.cuil === preview.cuil && p.periodo !== preview.periodo) {
-        if (onDemandPdfMode) {
-          const ok = await loadOnDemandPreviewByIndex(i)
-          if (!ok) return
-        }
+        const ok = await loadOnDemandPreviewByIndex(i)
+        if (!ok) return
         setPreviewIndex(i)
         return
       }
     }
-  }, [previewTargets, preview, previewIndex, onDemandPdfMode, loadOnDemandPreviewByIndex])
+  }, [previewTargets, preview, previewIndex, loadOnDemandPreviewByIndex])
 
   const handleNextPeriodInAgent = useCallback(async () => {
     if (!preview) return
     for (let i = previewIndex + 1; i < previewTargets.length; i += 1) {
       const p = previewTargets[i]
       if (p.cuil === preview.cuil && p.periodo !== preview.periodo) {
-        if (onDemandPdfMode) {
-          const ok = await loadOnDemandPreviewByIndex(i)
-          if (!ok) return
-        }
+        const ok = await loadOnDemandPreviewByIndex(i)
+        if (!ok) return
         setPreviewIndex(i)
         return
       }
     }
-  }, [previewTargets, preview, previewIndex, onDemandPdfMode, loadOnDemandPreviewByIndex])
+  }, [previewTargets, preview, previewIndex, loadOnDemandPreviewByIndex])
 
   const hasPrevAgent = useMemo(() => {
     if (!preview) return false
@@ -375,30 +516,26 @@ export function PayrollPage() {
     for (let i = previewIndex - 1; i >= 0; i -= 1) {
       const p = previewTargets[i]
       if (p.cuil !== preview.cuil) {
-        if (onDemandPdfMode) {
-          const ok = await loadOnDemandPreviewByIndex(i)
-          if (!ok) return
-        }
+        const ok = await loadOnDemandPreviewByIndex(i)
+        if (!ok) return
         setPreviewIndex(i)
         return
       }
     }
-  }, [previewTargets, preview, previewIndex, onDemandPdfMode, loadOnDemandPreviewByIndex])
+  }, [previewTargets, preview, previewIndex, loadOnDemandPreviewByIndex])
 
   const handleNextAgent = useCallback(async () => {
     if (!preview) return
     for (let i = previewIndex + 1; i < previewTargets.length; i += 1) {
       const p = previewTargets[i]
       if (p.cuil !== preview.cuil) {
-        if (onDemandPdfMode) {
-          const ok = await loadOnDemandPreviewByIndex(i)
-          if (!ok) return
-        }
+        const ok = await loadOnDemandPreviewByIndex(i)
+        if (!ok) return
         setPreviewIndex(i)
         return
       }
     }
-  }, [previewTargets, preview, previewIndex, onDemandPdfMode, loadOnDemandPreviewByIndex])
+  }, [previewTargets, preview, previewIndex, loadOnDemandPreviewByIndex])
 
   const handlePreviewSearch = useCallback(
     async (query: string) => {
@@ -412,14 +549,12 @@ export function PayrollPage() {
         targetIndex = previewTargets.findIndex((p) => p.periodo.toLowerCase().includes(q))
       }
       if (targetIndex !== -1) {
-        if (onDemandPdfMode) {
-          const ok = await loadOnDemandPreviewByIndex(targetIndex)
-          if (!ok) return
-        }
+        const ok = await loadOnDemandPreviewByIndex(targetIndex)
+        if (!ok) return
         setPreviewIndex(targetIndex)
       }
     },
-    [previewTargets, onDemandPdfMode, loadOnDemandPreviewByIndex],
+    [previewTargets, loadOnDemandPreviewByIndex],
   )
 
   const keys = useMemo(() => {
@@ -452,7 +587,10 @@ export function PayrollPage() {
       if (!apiId) return null
 
       const run = (async () => {
-        const rawBundle = await fetchChequesBundle(apiId, periodoYYYYMM)
+        const rawBundle = await fetchChequesBundle(apiId, periodoYYYYMM, {
+          includeMensajeria: false,
+          attempts: 2,
+        })
         const secuenciaSpec =
           queryMode === 'batch'
             ? resolveCsvSecuenciaFilterSpecForPair(apiId, periodoYYYYMM, csvRows, normalizeRequestedId)
@@ -461,7 +599,7 @@ export function PayrollPage() {
         const visibleBundle =
           filteredBundle.id === target.cuil ? filteredBundle : { ...filteredBundle, id: target.cuil }
         const observations = bundleToObservations(visibleBundle, target.cuil)
-        if (observations.length > 0) {
+        if (observations.length > 0 && !downloadingZipRef.current) {
           setOnDemandObservations((prev) => {
             const next = [...prev]
             observations.forEach((entry) => {
@@ -499,13 +637,43 @@ export function PayrollPage() {
 
       const run = (async () => {
         const visibleBundle = await fetchVisibleBundleForTarget(target)
+        const targetSkipKey = `${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`
         if (!visibleBundle) {
+          pdfSkipReasonRef.current.set(
+            targetSkipKey,
+            `No se pudo consultar información para ${target.periodo}.`,
+          )
+          pdfCacheRef.current.set(targetKey, null)
+          return null
+        }
+        const endpointError = summarizeBundleEndpointError(visibleBundle)
+        if (endpointError) {
+          pdfSkipReasonRef.current.set(targetSkipKey, endpointError)
+          pdfCacheRef.current.set(targetKey, null)
+          return null
+        }
+        const printableItems = bundleToPayrollItems(visibleBundle, target.cuil)
+        if (printableItems.length === 0) {
+          pdfSkipReasonRef.current.set(
+            targetSkipKey,
+            `No se encontró información para el período ${target.periodo}.`,
+          )
           pdfCacheRef.current.set(targetKey, null)
           return null
         }
         const key = `${target.cuil}-${target.periodo.replace('-', '')}`
-        const docs = buildAgentPdfs(filteredData, { [key]: visibleBundle }, [target.cuil], [target.periodo])
+        const singleTargetData: NormalizedPayroll = {
+          items: printableItems,
+          agents: [
+            {
+              cuil: target.cuil,
+              nombre: filteredData.agents.find((agent) => agent.cuil === target.cuil)?.nombre,
+            },
+          ],
+        }
+        const docs = buildAgentPdfs(singleTargetData, { [key]: visibleBundle }, [target.cuil], [target.periodo])
         const result = docs[0] ?? null
+        pdfSkipReasonRef.current.delete(targetSkipKey)
         pdfCacheRef.current.set(targetKey, result)
         return result
       })()
@@ -531,7 +699,6 @@ export function PayrollPage() {
   )
 
   async function loadOnDemandPreviewByIndex(idx: number): Promise<boolean> {
-    if (!onDemandPdfMode) return true
     const target = previewTargets[idx]
     if (!target) return false
 
@@ -540,26 +707,13 @@ export function PayrollPage() {
       setOnDemandPreviewLoading(true)
       const next = await buildPdfEntryForTarget(target)
       if (!next) {
-        setPreviewLoadError('No se pudo generar la vista previa para el documento/período elegido.')
+        const reason =
+          pdfSkipReasonRef.current.get(`${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`) ??
+          'No se pudo generar la vista previa para el documento/período elegido.'
+        setPreviewLoadError(reason)
         return false
       }
       setOnDemandPreview(next)
-      return true
-    } catch (e) {
-      setPreviewLoadError(e instanceof Error ? e.message : 'Error al consultar endpoints para vista previa.')
-      return false
-    } finally {
-      setOnDemandPreviewLoading(false)
-    }
-  }
-
-  async function queryPreviewByIndex(idx: number): Promise<boolean> {
-    const target = previewTargets[idx]
-    if (!target) return false
-    try {
-      setPreviewLoadError(null)
-      setOnDemandPreviewLoading(true)
-      await buildPdfEntryForTarget(target)
       return true
     } catch (e) {
       setPreviewLoadError(e instanceof Error ? e.message : 'Error al consultar endpoints para vista previa.')
@@ -574,7 +728,6 @@ export function PayrollPage() {
       setPreviewIndex(0)
       setOnDemandPreview(null)
       setPreviewLoadError(null)
-      if (!onDemandPdfMode) setPdfOpen(true)
       return
     }
     let idx = 0
@@ -588,10 +741,8 @@ export function PayrollPage() {
       const i = previewTargets.findIndex((p) => p.periodo.toLowerCase().includes(normalizedPeriodSearch))
       idx = i >= 0 ? i : 0
     }
-    if (onDemandPdfMode) {
-      const ok = await loadOnDemandPreviewByIndex(idx)
-      if (!ok) return
-    }
+    const ok = await loadOnDemandPreviewByIndex(idx)
+    if (!ok) return
     setPreviewIndex(idx)
     setPdfOpen(true)
   }, [
@@ -599,7 +750,6 @@ export function PayrollPage() {
     groupMode,
     currentKey,
     normalizedPeriodSearch,
-    onDemandPdfMode,
     loadOnDemandPreviewByIndex,
   ])
 
@@ -662,6 +812,10 @@ export function PayrollPage() {
   }, [loading, consultStartedAt])
 
   useEffect(() => {
+    downloadingZipRef.current = downloadingZip
+  }, [downloadingZip])
+
+  useEffect(() => {
     if (downloadingZip) {
       setZipStartedAt((prev) => prev ?? Date.now())
       return
@@ -698,16 +852,9 @@ export function PayrollPage() {
   }, [loading, clearHeavyCaches])
 
   useEffect(() => {
-    if (onDemandPdfMode) return
-    setOnDemandObservations([])
-    seenOnDemandObservationKeysRef.current.clear()
-  }, [onDemandPdfMode])
-
-  useEffect(() => {
-    if (!onDemandPdfMode) return
     if (Object.keys(chequesByKey).length === 0) return
     dispatch({ type: 'SET_CHEQUES_MAP', payload: {} })
-  }, [onDemandPdfMode, chequesByKey, dispatch])
+  }, [chequesByKey, dispatch])
 
   useEffect(() => {
     if (previewIndex >= previewTargets.length && previewTargets.length > 0) {
@@ -732,13 +879,6 @@ export function PayrollPage() {
   }, [previewTargets, queryMode, groupMode, normalizedAgentSearch, normalizedPeriodSearch])
 
   useEffect(() => {
-    if (!onDemandPdfMode) {
-      setTableOnDemandItems([])
-      setTableOnDemandLoading(false)
-      setTableOnDemandError(null)
-      setTableOnDemandItemsByGroup({})
-      return
-    }
     if (downloadingZip) {
       setTableOnDemandLoading(false)
       return
@@ -792,7 +932,6 @@ export function PayrollPage() {
       cancelled = true
     }
   }, [
-    onDemandPdfMode,
     currentKey,
     currentTableGroupKey,
     currentTableTargets,
@@ -818,11 +957,11 @@ export function PayrollPage() {
           : -1
       if (idx < 0) idx = previewTargets.findIndex((p) => p.cuil === cuil)
       if (idx < 0) return
-      const ok = onDemandPdfMode ? await loadOnDemandPreviewByIndex(idx) : await queryPreviewByIndex(idx)
+      const ok = await loadOnDemandPreviewByIndex(idx)
       if (!ok) return
       setPreviewIndex(idx)
     },
-    [preview, previewTargets, onDemandPdfMode, loadOnDemandPreviewByIndex, queryPreviewByIndex],
+    [preview, previewTargets, loadOnDemandPreviewByIndex],
   )
 
   const handleSelectPreviewPeriod = useCallback(
@@ -835,30 +974,31 @@ export function PayrollPage() {
           : -1
       if (idx < 0) idx = previewTargets.findIndex((p) => p.periodo === periodo)
       if (idx < 0) return
-      const ok = onDemandPdfMode ? await loadOnDemandPreviewByIndex(idx) : await queryPreviewByIndex(idx)
+      const ok = await loadOnDemandPreviewByIndex(idx)
       if (!ok) return
       setPreviewIndex(idx)
     },
-    [preview, previewTargets, onDemandPdfMode, loadOnDemandPreviewByIndex, queryPreviewByIndex],
+    [preview, previewTargets, loadOnDemandPreviewByIndex],
   )
 
   const downloadAllPdfs = useCallback(async () => {
     if (!filteredData) return
 
+    let shouldPreserveDownloadObservations = false
     try {
       setDownloadError(null)
       setDownloadingZip(true)
       setZipProgress(null)
       setZipSkipped([])
-      // Evita arrastrar memoria de una corrida previa al iniciar otra descarga masiva.
-      clearHeavyCaches()
-      // Siempre 1 PDF por agente × período.
-      const docs: PdfEntry[] = onDemandPdfMode
-        ? []
-        : buildAgentPdfs(filteredData, chequesByKey)
-      const targets: PdfTarget[] = onDemandPdfMode
-        ? previewTargets
-        : docs.map((d) => ({ cuil: d.cuil, periodo: d.periodo }))
+      setZipResultSummary(null)
+      const targets: PdfTarget[] = [...previewTargets].sort((a, b) => {
+        if (groupMode === 'period') {
+          if (a.periodo !== b.periodo) return a.periodo.localeCompare(b.periodo)
+          return a.cuil.localeCompare(b.cuil)
+        }
+        if (a.cuil !== b.cuil) return a.cuil.localeCompare(b.cuil)
+        return a.periodo.localeCompare(b.periodo)
+      })
       if (targets.length === 0) return
 
       const manualDocFolder =
@@ -880,40 +1020,62 @@ export function PayrollPage() {
       let completed = 0
       let added = 0
       const skipped: string[] = []
+      const summary: ZipResultSummary = {
+        generated: 0,
+        skipped: 0,
+        forbidden: 0,
+        noInfo: 0,
+        endpointError: 0,
+        other: 0,
+      }
 
-      await mapLimit(targets, zipConcurrency || ZIP_DOWNLOAD_CONCURRENCY, async (target, index) => {
+      let lastProgressTs = 0
+      await mapLimit(targets, zipConcurrency || ZIP_DOWNLOAD_CONCURRENCY, async (target) => {
         const fallbackName = `haberes-${target.cuil}-${target.periodo}.pdf`
         try {
-          const d = onDemandPdfMode ? await buildPdfEntryForTarget(target) : docs[index]
+          const d = await buildPdfEntryForTarget(target)
           if (!d) {
-            skipped.push(`${fallbackName} (sin datos)`)
+            const reason =
+              pdfSkipReasonRef.current.get(`${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`) ?? 'sin datos'
+            skipped.push(`${fallbackName} (${reason})`)
+            summary.skipped += 1
+            summary[classifySkipReason(reason)] += 1
             return null
           }
           const filename = pdfFilename(d)
           const bytes = await createPdfUint8ArrayWithTimeout(d.doc, PDF_TIMEOUT_MS)
-          const inner = `${d.cuil}/${filename}`
+          const inner = groupMode === 'period' ? `${d.periodo}/${filename}` : `${d.cuil}/${filename}`
           const zipPath = manualDocFolder ? `${manualDocFolder}/${inner}` : inner
           zip.file(zipPath, bytes, { binary: true })
           added += 1
+          summary.generated += 1
           return null
         } catch (err) {
           console.error('Error al generar PDF para ZIP', fallbackName, err)
           const reason =
             err instanceof Error ? (err.message === 'timeout' ? 'timeout' : err.message) : 'error'
           skipped.push(`${fallbackName} (${reason})`)
+          summary.skipped += 1
+          summary[classifySkipReason(reason)] += 1
           return null
         } finally {
           completed += 1
-          setZipProgress({
-            current: completed,
-            total: targets.length,
-            label: `Procesados ${completed}/${targets.length}`,
-          })
+          const now = Date.now()
+          if (completed === targets.length || completed % 5 === 0 || now - lastProgressTs >= 250) {
+            lastProgressTs = now
+            setZipProgress({
+              current: completed,
+              total: targets.length,
+              label: `Procesados ${completed}/${targets.length}`,
+            })
+          }
         }
       })
 
       if (added === 0) {
+        shouldPreserveDownloadObservations = true
         setZipSkipped(skipped)
+        setZipResultSummary(summary)
         setDownloadError('No se pudo generar ningún PDF para el ZIP.')
         return
       }
@@ -924,14 +1086,10 @@ export function PayrollPage() {
         label: 'Empaquetando ZIP final…',
       })
       let lastPackedPct = -1
-      const rawZipBlob = await zip.generateAsync(
-        {
-          type: 'blob',
-          compression: 'STORE',
-          streamFiles: true,
-        },
-        (metadata) => {
-          const pct = Math.round(metadata.percent)
+      const rawZipBlob = await generateZipBlobWithTimeout(
+        zip,
+        (percent) => {
+          const pct = Math.round(percent)
           if (pct < 100 && pct - lastPackedPct < 5) return
           lastPackedPct = pct
           setZipProgress({
@@ -940,32 +1098,38 @@ export function PayrollPage() {
             label: `Empaquetando ZIP final… ${pct}%`,
           })
         },
+        ZIP_FINALIZE_TIMEOUT_MS,
       )
       downloadBlob(rawZipBlob, `${baseZipName}.zip`)
       setZipSkipped(skipped)
+      setZipResultSummary(summary)
+      if (skipped.length > 0) {
+        shouldPreserveDownloadObservations = true
+      }
     } catch (e) {
       console.error('Error al generar ZIP de PDFs', e)
       const message =
         e instanceof Error && e.message === 'timeout'
           ? 'Tiempo de espera agotado para algún PDF.'
+          : e instanceof Error && e.message === 'zip-timeout'
+            ? 'El empaquetado del ZIP tardó demasiado y fue cancelado.'
           : null
       setDownloadError(
         `No se pudo generar el ZIP.${message ? ` ${message}` : ''} Revisá el filtro y volvé a intentar.`,
       )
+      shouldPreserveDownloadObservations = true
     } finally {
       setDownloadingZip(false)
       // Luego de descargar, liberamos estado/caches transitorios para minimizar degradación.
-      cleanupAfterDownload()
+      cleanupAfterDownload({ preserveObservations: shouldPreserveDownloadObservations })
     }
   }, [
     filteredData,
-    chequesByKey,
+    groupMode,
     queryMode,
     manualCuil,
-    onDemandPdfMode,
     previewTargets,
     buildPdfEntryForTarget,
-    clearHeavyCaches,
     cleanupAfterDownload,
   ])
 
@@ -1089,7 +1253,7 @@ export function PayrollPage() {
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" onClick={() => void consult()} disabled={loading || downloadingZip}>
+                <Button type="button" onClick={() => void consult()} disabled={loading}>
                   {loading ? 'Consultando' : 'Consultar'}
                 </Button>
                 <div className="text-sm text-on-surface-variant">
@@ -1223,7 +1387,7 @@ export function PayrollPage() {
                   <div className="flex items-center justify-between gap-3">
                     <p>
                       Se detectaron {visibleErrors.length} observaciones
-                      {onDemandPdfMode ? ' (incluye consultas on-demand en curso).' : ' al normalizar la respuesta.'}
+                      {' (incluye consultas on-demand en curso).'}
                     </p>
                     <Button
                       type="button"
@@ -1295,11 +1459,9 @@ export function PayrollPage() {
                 <span className="text-xs text-on-surface-variant self-center">
                   {zipPdfCount} PDF(s) en el ZIP
                 </span>
-              {onDemandPdfMode ? (
-                <span className="text-xs text-warning-text self-center">
-                  Modo alto volumen activo: los PDF se consultan bajo demanda.
-                </span>
-              ) : null}
+              <span className="text-xs text-warning-text self-center">
+                Modo alto volumen activo: los PDF se consultan bajo demanda.
+              </span>
               </div>
               {downloadingZip ? (
                 <p className="text-xs text-on-surface-variant">
@@ -1321,6 +1483,14 @@ export function PayrollPage() {
               {downloadError ? (
                 <p className="text-xs text-danger-text">{downloadError}</p>
               ) : null}
+              {zipResultSummary ? (
+                <p className="text-xs text-on-surface-variant">
+                  Resultado ZIP — Generados: {zipResultSummary.generated} · Omitidos: {zipResultSummary.skipped} ·
+                  Forbidden: {zipResultSummary.forbidden} · Sin información: {zipResultSummary.noInfo} · Error
+                  endpoint: {zipResultSummary.endpointError}
+                  {zipResultSummary.other > 0 ? ` · Otros: ${zipResultSummary.other}` : ''}
+                </p>
+              ) : null}
               {zipSkipped.length > 0 ? (
                 <p className="text-xs text-warning-text">
                   Se omitieron {zipSkipped.length} PDF(s): {zipSkipped.slice(0, 5).join(', ')}
@@ -1336,20 +1506,18 @@ export function PayrollPage() {
                       <div className="flex items-center justify-between">
                         <h4 className="text-sm font-semibold text-on-surface">Agente {currentKey}</h4>
                         <span className="text-xs text-on-surface-variant">
-                          {(onDemandPdfMode ? tableOnDemandItems : grouped.byCuil[currentKey]).length} ítems
+                          {tableOnDemandItems.length} ítems
                         </span>
                       </div>
-                      {onDemandPdfMode ? (
-                        <p className="text-xs text-on-surface-variant">
-                          {tableOnDemandLoading
-                            ? 'Consultando datos del agente seleccionado…'
-                            : 'Datos cargados bajo demanda para el agente seleccionado.'}
-                        </p>
-                      ) : null}
-                      {onDemandPdfMode && tableOnDemandError ? (
+                      <p className="text-xs text-on-surface-variant">
+                        {tableOnDemandLoading
+                          ? 'Consultando datos del agente seleccionado…'
+                          : 'Datos cargados bajo demanda para el agente seleccionado.'}
+                      </p>
+                      {tableOnDemandError ? (
                         <p className="text-xs text-danger-text">{tableOnDemandError}</p>
                       ) : null}
-                      <ResultsTable items={onDemandPdfMode ? tableOnDemandItems : grouped.byCuil[currentKey]} />
+                      <ResultsTable items={tableOnDemandItems} />
                     </div>
                   </div>
                 ) : null}
@@ -1360,21 +1528,19 @@ export function PayrollPage() {
                       <div className="flex items-center justify-between">
                         <h4 className="text-sm font-semibold text-on-surface">Período {currentKey}</h4>
                         <span className="text-xs text-on-surface-variant">
-                          {(onDemandPdfMode ? tableOnDemandItems : grouped.byPeriod[currentKey]).length} ítems
+                          {tableOnDemandItems.length} ítems
                         </span>
                       </div>
-                      {onDemandPdfMode ? (
-                        <p className="text-xs text-on-surface-variant">
-                          {tableOnDemandLoading
-                            ? 'Consultando datos del período seleccionado…'
-                            : 'Datos cargados bajo demanda para el período seleccionado.'}
-                        </p>
-                      ) : null}
-                      {onDemandPdfMode && tableOnDemandError ? (
+                      <p className="text-xs text-on-surface-variant">
+                        {tableOnDemandLoading
+                          ? 'Consultando datos del período seleccionado…'
+                          : 'Datos cargados bajo demanda para el período seleccionado.'}
+                      </p>
+                      {tableOnDemandError ? (
                         <p className="text-xs text-danger-text">{tableOnDemandError}</p>
                       ) : null}
                       <ResultsTable
-                        items={onDemandPdfMode ? tableOnDemandItems : grouped.byPeriod[currentKey]}
+                        items={tableOnDemandItems}
                         separatorBy="agent"
                       />
                     </div>
