@@ -26,7 +26,7 @@ function keyFor(id: string, periodoYYYYMM: string): string {
 function friendlyErrorLabel(e: unknown): string {
   if (axios.isAxiosError(e)) {
     const status = e.response?.status
-    if (status === 403) return 'Forbidden (posible VPN requerida)'
+    if (status === 403) return 'Forbidden/403'
     if (status) return `HTTP ${status}`
   }
   return e instanceof Error ? e.message : 'Error'

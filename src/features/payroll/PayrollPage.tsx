@@ -155,7 +155,7 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
   if (!bundleHasMeaningfulData(bundle) && (!bundle.errors || bundle.errors.length === 0)) {
     observations.push({
       cuil: visibleCuil,
-      message: `La consulta devolvió todos los campos vacíos para el período ${periodo}. Revisá permisos/conectividad e intentá nuevamente.`,
+      message: `No se pudo obtener información para el período ${periodo}. Verificá la conectividad e intentá nuevamente.`,
     })
     return observations
   }
@@ -175,7 +175,8 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
   if (!hasNonZeroDetail && totalLiquido === 0) {
     observations.push({
       cuil: visibleCuil,
-      message: `No se detectaron pagos para el período ${periodo}.`,
+      message:
+        'No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.',
     })
   }
 
@@ -184,7 +185,7 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
     if (forbiddenFound) {
       observations.push({
         cuil: visibleCuil,
-        message: 'Acceso denegado (Forbidden/403). No tenemos permisos para consultar esta información.',
+        message: 'Acceso denegado (Forbidden/403).',
       })
     }
     observations.push(
@@ -219,7 +220,7 @@ function summarizeBundleEndpointError(bundle: ChequesBundle): string | null {
   const errors = bundle.errors ?? []
   if (errors.length === 0) return null
   if (errors.some(isForbiddenErrorMessage)) {
-    return 'Acceso denegado (Forbidden/403). No tenemos permisos para consultar esta información.'
+    return 'Acceso denegado (Forbidden/403).'
   }
   return errors[0] ?? null
 }
@@ -247,6 +248,22 @@ function classifySkipReason(reason: string): keyof Omit<ZipResultSummary, 'gener
     return 'endpointError'
   }
   return 'other'
+}
+
+function classifyObservationType(message: string): string {
+  const msg = message.toLowerCase()
+  if (msg.includes('forbidden') || msg.includes('403') || msg.includes('acceso denegado')) {
+    return 'Acceso denegado'
+  }
+  if (msg.includes('no se detectaron pagos')) return 'Sin pagos'
+  if (msg.includes('no se encontró información') || msg.includes('no se pudo obtener información')) {
+    return 'Sin información'
+  }
+  if (msg.includes('http ') || msg.includes('status code') || msg.includes('endpoint') || msg.includes('timeout')) {
+    return 'Error de endpoint'
+  }
+  if (msg.includes('importe inválido')) return 'Dato inválido'
+  return 'Observación general'
 }
 
 async function createPdfUint8ArrayWithTimeout(doc: PdfEntry['doc'], ms: number): Promise<Uint8Array> {
@@ -324,6 +341,7 @@ export function PayrollPage() {
   const [zipSkipped, setZipSkipped] = useState<string[]>([])
   const [zipResultSummary, setZipResultSummary] = useState<ZipResultSummary | null>(null)
   const [showErrorDetails, setShowErrorDetails] = useState(false)
+  const [expandedErrorAgents, setExpandedErrorAgents] = useState<Record<string, boolean>>({})
   const [onDemandPreview, setOnDemandPreview] = useState<PdfEntry | null>(null)
   const [onDemandPreviewLoading, setOnDemandPreviewLoading] = useState(false)
   const [previewLoadError, setPreviewLoadError] = useState<string | null>(null)
@@ -448,6 +466,69 @@ export function PayrollPage() {
     })
     return merged
   }, [data, onDemandObservations])
+  const visibleErrorsByAgent = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { cuil: string; messages: string[]; primaryType: string; typeRank: number; typeCounts: Map<string, number> }
+    >()
+    const typePriority: Record<string, number> = {
+      'Acceso denegado': 5,
+      'Error de endpoint': 4,
+      'Dato inválido': 3,
+      'Sin información': 2,
+      'Sin pagos': 1,
+      'Observación general': 0,
+    }
+
+    visibleErrors.forEach((e) => {
+      const entry = grouped.get(e.cuil) ?? {
+        cuil: e.cuil,
+        messages: [],
+        primaryType: 'Observación general',
+        typeRank: -1,
+        typeCounts: new Map<string, number>(),
+      }
+      entry.messages.push(e.message)
+      const type = classifyObservationType(e.message)
+      entry.typeCounts.set(type, (entry.typeCounts.get(type) ?? 0) + 1)
+      const rank = typePriority[type] ?? 0
+      if (rank > entry.typeRank) {
+        entry.typeRank = rank
+        entry.primaryType = type
+      }
+      grouped.set(e.cuil, entry)
+    })
+
+    return Array.from(grouped.values()).map((entry) => {
+      const secondary = Array.from(entry.typeCounts.entries())
+        .filter(([type]) => type !== entry.primaryType)
+        .sort((a, b) => b[1] - a[1])[0]
+      const typeLabel = secondary
+        ? `${entry.primaryType} (+${secondary[0].toLowerCase()})`
+        : entry.primaryType
+      return { cuil: entry.cuil, messages: entry.messages, typeLabel }
+    })
+  }, [visibleErrors])
+  const skippedErrorsByAgent = useMemo(() => {
+    const grouped = new Map<string, string[]>()
+    zipSkipped.forEach((line) => {
+      const match = /^haberes-([^-]+)-(\d{4}-\d{2})\.pdf \((.*)\)$/.exec(line.trim())
+      if (!match) return
+      const [, cuil, periodo, reason] = match
+      const message = `${reason} (Período ${periodo})`
+      const prev = grouped.get(cuil) ?? []
+      if (!prev.includes(message)) prev.push(message)
+      grouped.set(cuil, prev)
+    })
+    return Array.from(grouped.entries()).map(([cuil, messages]) => ({
+      cuil,
+      messages,
+      typeLabel: classifyObservationType(messages[0] ?? 'Observación general'),
+    }))
+  }, [zipSkipped])
+  const observationsByAgent = visibleErrorsByAgent.length > 0 ? visibleErrorsByAgent : skippedErrorsByAgent
+  const hasObservations = visibleErrors.length > 0 || zipSkipped.length > 0
+  const observationsCount = Math.max(visibleErrors.length, zipSkipped.length)
 
   const hasPrevPeriodInAgent = useMemo(() => {
     if (!preview) return false
@@ -599,7 +680,7 @@ export function PayrollPage() {
         const visibleBundle =
           filteredBundle.id === target.cuil ? filteredBundle : { ...filteredBundle, id: target.cuil }
         const observations = bundleToObservations(visibleBundle, target.cuil)
-        if (observations.length > 0 && !downloadingZipRef.current) {
+        if (observations.length > 0) {
           setOnDemandObservations((prev) => {
             const next = [...prev]
             observations.forEach((entry) => {
@@ -984,7 +1065,7 @@ export function PayrollPage() {
   const downloadAllPdfs = useCallback(async () => {
     if (!filteredData) return
 
-    let shouldPreserveDownloadObservations = false
+    let shouldPreserveDownloadObservations = true
     try {
       setDownloadError(null)
       setDownloadingZip(true)
@@ -1038,6 +1119,12 @@ export function PayrollPage() {
             const reason =
               pdfSkipReasonRef.current.get(`${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`) ?? 'sin datos'
             skipped.push(`${fallbackName} (${reason})`)
+            setOnDemandObservations((prev) => {
+              const key = `${target.cuil}|${target.periodo.replace('-', '')}|${reason}`
+              if (seenOnDemandObservationKeysRef.current.has(key)) return prev
+              seenOnDemandObservationKeysRef.current.add(key)
+              return [...prev, { cuil: target.cuil, message: `${reason} (Período ${target.periodo})` }]
+            })
             summary.skipped += 1
             summary[classifySkipReason(reason)] += 1
             return null
@@ -1055,6 +1142,12 @@ export function PayrollPage() {
           const reason =
             err instanceof Error ? (err.message === 'timeout' ? 'timeout' : err.message) : 'error'
           skipped.push(`${fallbackName} (${reason})`)
+          setOnDemandObservations((prev) => {
+            const key = `${target.cuil}|${target.periodo.replace('-', '')}|${reason}`
+            if (seenOnDemandObservationKeysRef.current.has(key)) return prev
+            seenOnDemandObservationKeysRef.current.add(key)
+            return [...prev, { cuil: target.cuil, message: `${reason} (Período ${target.periodo})` }]
+          })
           summary.skipped += 1
           summary[classifySkipReason(reason)] += 1
           return null
@@ -1382,12 +1475,11 @@ export function PayrollPage() {
                 </div>
               </div>
 
-              {visibleErrors.length > 0 ? (
+              {hasObservations ? (
                 <div className="rounded-md bg-warning-bg p-3 text-sm text-warning-text ring-1 ring-warning-border space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <p>
-                      Se detectaron {visibleErrors.length} observaciones
-                      {' (incluye consultas on-demand en curso).'}
+                      Se han detectado {observationsCount} observaciones.
                     </p>
                     <Button
                       type="button"
@@ -1395,47 +1487,56 @@ export function PayrollPage() {
                       className="h-7 px-2 text-[11px] leading-none"
                       onClick={() => setShowErrorDetails((v) => !v)}
                     >
-                      {showErrorDetails ? 'Ocultar detalles' : 'Ver detalles'}
+                      {showErrorDetails ? 'Ocultar' : 'Ver más'}
                     </Button>
                   </div>
                   {showErrorDetails ? (
-                    (() => {
-                      const errs = visibleErrors
-                      return (
-                        <div className="space-y-2 text-xs">
-                          <div>
-                            <p className="font-semibold">Documentos con observaciones</p>
-                            <ul className="mt-1 list-disc pl-5">
-                              {Array.from(
-                                new Map(
-                                  errs.map((e) => [
-                                    e.cuil,
-                                    {
-                                      cuil: e.cuil,
-                                      messages: errs.filter((x) => x.cuil === e.cuil).map((x) => x.message),
-                                    },
-                                  ]),
-                                ).values(),
-                              ).map((entry) => (
-                                <li key={entry.cuil}>
-                                  <span className="font-mono">{entry.cuil}</span>
-                                  {entry.messages.length > 0 ? (
-                                    <span className="text-on-surface-variant">
-                                      {' '}
-                                      – {entry.messages[0]}
-                                      {entry.messages.length > 1
-                                        ? ` (+${entry.messages.length - 1} más)`
-                                        : ''}
-                                    </span>
-                                  ) : null}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                          {/* Ocultamos "Detalle completo": solo mostramos el resumen por documento. */}
-                        </div>
-                      )
-                    })()
+                    <div className="space-y-2 text-xs">
+                      <p className="font-semibold">Panel de observaciones por documento</p>
+                      {observationsByAgent.length > 0 ? (
+                        <ul className="space-y-2">
+                          {observationsByAgent.map((entry) => {
+                            const isOpen = expandedErrorAgents[entry.cuil] ?? false
+                            return (
+                              <li key={entry.cuil} className="rounded border border-warning-border/60 p-2">
+                                <div className="flex items-center gap-3">
+                                  <div className="min-w-0 flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      className="h-6 w-6 rounded border border-warning-border/60 text-[14px] leading-none text-warning-text"
+                                      aria-label={isOpen ? `Ocultar observaciones de ${entry.cuil}` : `Ver observaciones de ${entry.cuil}`}
+                                      onClick={() =>
+                                        setExpandedErrorAgents((prev) => ({
+                                          ...prev,
+                                          [entry.cuil]: !isOpen,
+                                        }))
+                                      }
+                                    >
+                                      {isOpen ? '−' : '+'}
+                                    </button>
+                                    <span className="font-mono">{entry.cuil}</span>
+                                    {entry.messages.length > 0 ? (
+                                      <span className="text-on-surface-variant">
+                                        {' - '}
+                                        {entry.typeLabel}
+                                        {entry.messages.length > 1 ? ` (${entry.messages.length} observaciones)` : ''}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                {isOpen ? (
+                                  <ul className="mt-2 list-disc pl-5 text-on-surface-variant">
+                                    {entry.messages.map((message, idx) => (
+                                      <li key={`${entry.cuil}-${idx}`}>{message}</li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               ) : null}
@@ -1459,15 +1560,7 @@ export function PayrollPage() {
                 <span className="text-xs text-on-surface-variant self-center">
                   {zipPdfCount} PDF(s) en el ZIP
                 </span>
-              <span className="text-xs text-warning-text self-center">
-                Modo alto volumen activo: los PDF se consultan bajo demanda.
-              </span>
               </div>
-              {downloadingZip ? (
-                <p className="text-xs text-on-surface-variant">
-                  Tiempo descarga: <span className="font-medium">{formatElapsed(zipElapsedMs)}</span>
-                </p>
-              ) : null}
               {previewLoadError ? <p className="text-xs text-danger-text">{previewLoadError}</p> : null}
               {zipProgress ? (
                 <p className="text-xs text-on-surface-variant">
@@ -1493,8 +1586,8 @@ export function PayrollPage() {
               ) : null}
               {zipSkipped.length > 0 ? (
                 <p className="text-xs text-warning-text">
-                  Se omitieron {zipSkipped.length} PDF(s): {zipSkipped.slice(0, 5).join(', ')}
-                  {zipSkipped.length > 5 ? '…' : ''}
+                  Se omitieron {zipSkipped.length} PDF(s). Revisá el panel "Observaciones" para ver el detalle
+                  por documento/período.
                 </p>
               ) : null}
 

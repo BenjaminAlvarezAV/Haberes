@@ -305,11 +305,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
 
           if (hasForbiddenInProbe) {
             forbiddenReported.add(id)
-            registerError(
-              id,
-              probePeriodo,
-              `Acceso denegado al validar el DNI ${id}. Es posible que no tengas permisos para consultar esta información (por ejemplo, VPN requerida).`,
-            )
+            registerError(id, probePeriodo, `Acceso denegado (Forbidden/403) al validar el DNI ${id}.`)
           }
           const returnedRaw = extractCuilFromLiquidacion(rows)
           const returned = returnedRaw ? normalizeCuil(returnedRaw) : null
@@ -486,7 +482,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           registerError(
             bundle.id,
             periodo,
-            `La consulta devolvió todos los campos vacíos para el período ${periodo}. Revisá permisos/conectividad (por ejemplo VPN) e intentá nuevamente.`,
+            `No se pudo obtener información para el período ${periodo}. Verificá la conectividad e intentá nuevamente.`,
           )
           return
         }
@@ -535,7 +531,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           registerError(
             bundle.id,
             periodo,
-            `No se detectaron pagos para el período ${periodo}. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.`,
+            'No se detectaron pagos para este período. Es posible que todavía no estén acreditados o que haya un problema en el servicio de consulta.',
           )
         }
 
@@ -551,11 +547,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           })
           if (hasForbidden && !forbiddenReported.has(bundle.id)) {
             forbiddenReported.add(bundle.id)
-            registerError(
-              bundle.id,
-              periodo,
-              `Acceso denegado (Forbidden/403) al consultar el DNI ${bundle.id}. Es posible que no tengas permisos para ver esta información (por ejemplo, VPN requerida).`,
-            )
+            registerError(bundle.id, periodo, `Acceso denegado (Forbidden/403) al consultar el DNI ${bundle.id}.`)
           }
           bundle.errors.forEach((msg) => {
             // Si ya detectamos 403, evitamos repetir el mensaje técnico "de siempre" en el resumen.
@@ -597,8 +589,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
           if (forbiddenReported.has(cuil)) {
             finalErrors.push({
               cuil,
-              message:
-                'Acceso denegado (Forbidden/403). Es posible que no tengas permisos para ver esta información (por ejemplo, VPN requerida).',
+              message: 'Acceso denegado (Forbidden/403).',
             })
             return
           }
