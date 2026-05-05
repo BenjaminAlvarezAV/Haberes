@@ -953,6 +953,7 @@ export function buildAgentPdfs(
   chequesByKey?: Record<string, ChequesBundle>,
   selectedAgents?: string[],
   selectedPeriods?: string[],
+  options?: { includeOfficialWatermark?: boolean },
 ): AgentPeriodPdf[] {
   const filtered: NormalizedPayroll = {
     ...normalized,
@@ -982,7 +983,11 @@ export function buildAgentPdfs(
         agentName,
         cheques: chequesByKey?.[key],
       })
-      out.push({ cuil, periodo: p, doc: receiptDoc(content) })
+      out.push({
+        cuil,
+        periodo: p,
+        doc: receiptDoc(content, { includeOfficialWatermark: options?.includeOfficialWatermark ?? false }),
+      })
     }
   }
 
@@ -1080,14 +1085,28 @@ function baseDoc(content: Content[]): TDocumentDefinitions {
   }
 }
 
-function receiptDoc(content: Content[]): TDocumentDefinitions {
+function receiptDoc(
+  content: Content[],
+  options?: { includeOfficialWatermark?: boolean },
+): TDocumentDefinitions {
   const printedDate = formatDateDDMMYYYY(new Date())
   return {
     pageSize: 'A4',
     // Un margen inferior más acotado ayuda a evitar páginas casi vacías.
     pageMargins: [40, 40, 40, 70],
     content,
-    // Sin marca de agua (requerimiento).
+    // Marca de agua opcional para uso oficial.
+    watermark:
+      options?.includeOfficialWatermark
+        ? {
+            text: 'USO OFICIAL',
+            angle: -55,
+            color: '#6b7280',
+            opacity: 0.2,
+            bold: true,
+            fontSize: 128,
+          }
+        : undefined,
     footer: (currentPage: number, pageCount: number) => ({
       margin: [40, 0, 40, 18],
       columns: [

@@ -335,6 +335,7 @@ export function PayrollPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [downloadingZip, setDownloadingZip] = useState(false)
+  const [includeOfficialWatermark, setIncludeOfficialWatermark] = useState(false)
   const [zipProgress, setZipProgress] = useState<{ current: number; total: number; label: string } | null>(
     null,
   )
@@ -394,6 +395,10 @@ export function PayrollPage() {
     // YYYY-MM-DD -> YYYY-MM
     return raw.length >= 7 ? raw.slice(0, 7).toLowerCase() : ''
   }, [periodSearchDate])
+  const pdfRenderVariantKey = useMemo(
+    () => `wm:${includeOfficialWatermark ? '1' : '0'}`,
+    [includeOfficialWatermark],
+  )
 
   // Filtro dual: aplica en paralelo por agente/documento y por período (independiente del modo).
   const filteredData = useMemo(() => {
@@ -669,7 +674,6 @@ export function PayrollPage() {
 
       const run = (async () => {
         const rawBundle = await fetchChequesBundle(apiId, periodoYYYYMM, {
-          includeMensajeria: false,
           attempts: 2,
         })
         const secuenciaSpec =
@@ -710,10 +714,11 @@ export function PayrollPage() {
     async (target: PdfTarget): Promise<PdfEntry | null> => {
       if (!filteredData) return null
       const targetKey = `${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`
-      if (pdfCacheRef.current.has(targetKey)) {
-        return pdfCacheRef.current.get(targetKey) ?? null
+      const pdfCacheKey = `${targetKey}${TARGET_FETCH_KEY_SEP}${pdfRenderVariantKey}`
+      if (pdfCacheRef.current.has(pdfCacheKey)) {
+        return pdfCacheRef.current.get(pdfCacheKey) ?? null
       }
-      const inFlight = pdfInFlightRef.current.get(targetKey)
+      const inFlight = pdfInFlightRef.current.get(pdfCacheKey)
       if (inFlight) return inFlight
 
       const run = (async () => {
@@ -724,13 +729,13 @@ export function PayrollPage() {
             targetSkipKey,
             `No se pudo consultar información para ${target.periodo}.`,
           )
-          pdfCacheRef.current.set(targetKey, null)
+          pdfCacheRef.current.set(pdfCacheKey, null)
           return null
         }
         const endpointError = summarizeBundleEndpointError(visibleBundle)
         if (endpointError) {
           pdfSkipReasonRef.current.set(targetSkipKey, endpointError)
-          pdfCacheRef.current.set(targetKey, null)
+          pdfCacheRef.current.set(pdfCacheKey, null)
           return null
         }
         const printableItems = bundleToPayrollItems(visibleBundle, target.cuil)
@@ -739,7 +744,7 @@ export function PayrollPage() {
             targetSkipKey,
             `No se encontró información para el período ${target.periodo}.`,
           )
-          pdfCacheRef.current.set(targetKey, null)
+          pdfCacheRef.current.set(pdfCacheKey, null)
           return null
         }
         const key = `${target.cuil}-${target.periodo.replace('-', '')}`
@@ -752,21 +757,27 @@ export function PayrollPage() {
             },
           ],
         }
-        const docs = buildAgentPdfs(singleTargetData, { [key]: visibleBundle }, [target.cuil], [target.periodo])
+        const docs = buildAgentPdfs(
+          singleTargetData,
+          { [key]: visibleBundle },
+          [target.cuil],
+          [target.periodo],
+          { includeOfficialWatermark },
+        )
         const result = docs[0] ?? null
         pdfSkipReasonRef.current.delete(targetSkipKey)
-        pdfCacheRef.current.set(targetKey, result)
+        pdfCacheRef.current.set(pdfCacheKey, result)
         return result
       })()
 
-      pdfInFlightRef.current.set(targetKey, run)
+      pdfInFlightRef.current.set(pdfCacheKey, run)
       try {
         return await run
       } finally {
-        pdfInFlightRef.current.delete(targetKey)
+        pdfInFlightRef.current.delete(pdfCacheKey)
       }
     },
-    [filteredData, fetchVisibleBundleForTarget],
+    [filteredData, fetchVisibleBundleForTarget, includeOfficialWatermark, pdfRenderVariantKey],
   )
 
   const currentTableTargets = useMemo(() => {
@@ -1363,6 +1374,15 @@ export function PayrollPage() {
                   </div>
                 ) : null}
               </div>
+              <label className="inline-flex items-center gap-2 text-sm text-on-surface select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={includeOfficialWatermark}
+                  onChange={(e) => setIncludeOfficialWatermark(e.target.checked)}
+                />
+                Agregar marca de agua
+              </label>
               {loading && fetchProgress ? (
                 <p className="text-xs text-on-surface-variant">
                   {fetchProgress.label}{' '}

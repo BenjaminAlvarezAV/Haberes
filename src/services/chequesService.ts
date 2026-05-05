@@ -63,14 +63,13 @@ async function fetchWithRetries<T>(
 export async function fetchChequesBundle(
   id: string,
   periodoYYYYMM: string,
-  options?: { includeMensajeria?: boolean; attempts?: number },
+  options?: { attempts?: number },
 ): Promise<ChequesBundle> {
-  const includeMensajeria = options?.includeMensajeria ?? true
   const attempts = options?.attempts ?? 3
   const errors: string[] = []
   logDevRequest('liquidPorEstablecimiento', id, periodoYYYYMM)
   logDevRequest('liquidacionPorSecuencia', id, periodoYYYYMM)
-  if (includeMensajeria) logDevRequest('mensajeria', id, periodoYYYYMM)
+  logDevRequest('mensajeria', id, periodoYYYYMM)
 
   const [estab, secu, msg] = await Promise.all([
     fetchWithRetries(
@@ -91,26 +90,21 @@ export async function fetchChequesBundle(
       errors,
       attempts,
     ).then((res) => res ?? []),
-    includeMensajeria
-      ? fetchWithRetries(
-          () =>
-            chequesClient
-              .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
-              .then((r) => normalizeMensajeria(r.data)),
-          'mensajeria',
-          errors,
-          attempts,
-        ).then(
-          (res) =>
-            res ?? {
-              mensajeGeneral: [],
-              mensajesPersonalizados: [],
-            },
-        )
-      : Promise.resolve({
+    fetchWithRetries(
+      () =>
+        chequesClient
+          .get<unknown>(`/wsstestsigue/cheques/mensajeria/${id}/${periodoYYYYMM}`)
+          .then((r) => normalizeMensajeria(r.data)),
+      'mensajeria',
+      errors,
+      attempts,
+    ).then(
+      (res) =>
+        res ?? {
           mensajeGeneral: [],
           mensajesPersonalizados: [],
-        }),
+        },
+    ),
   ])
 
   return {
