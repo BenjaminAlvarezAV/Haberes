@@ -204,6 +204,7 @@ function bundleToObservations(bundle: ChequesBundle, visibleCuil: string): Array
 const PDF_TIMEOUT_MS = 60000
 const ZIP_DOWNLOAD_CONCURRENCY = 4
 const ZIP_FINALIZE_TIMEOUT_MS = 900000
+const ZIP_MAX_ITEMS_PER_FILE = 1000
 const TARGET_FETCH_KEY_SEP = '|'
 
 function isForbiddenErrorMessage(message: string): boolean {
@@ -304,6 +305,63 @@ async function generateZipBlobWithTimeout(
   } finally {
     if (timeoutId !== null) window.clearTimeout(timeoutId)
   }
+}
+
+function partitionTargetsByMode(targets: PdfTarget[], mode: 'agent' | 'period', chunkSize: number): PdfTarget[][] {
+  if (targets.length === 0) return []
+  const groups: PdfTarget[][] = []
+  let currentGroup: PdfTarget[] = []
+  let currentGroupKey: string | null = null
+
+  for (const target of targets) {
+    const key = mode === 'agent' ? target.cuil : target.periodo
+    if (currentGroupKey === null || currentGroupKey === key) {
+      currentGroup.push(target)
+      currentGroupKey = key
+      continue
+    }
+    groups.push(currentGroup)
+    currentGroup = [target]
+    currentGroupKey = key
+  }
+  if (currentGroup.length > 0) groups.push(currentGroup)
+
+  const chunks: PdfTarget[][] = []
+  let currentChunk: PdfTarget[] = []
+
+  for (const group of groups) {
+    if (group.length > chunkSize) {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk)
+        currentChunk = []
+      }
+      for (let i = 0; i < group.length; i += chunkSize) {
+        chunks.push(group.slice(i, i + chunkSize))
+      }
+      continue
+    }
+    if (currentChunk.length + group.length > chunkSize) {
+      chunks.push(currentChunk)
+      currentChunk = [...group]
+      continue
+    }
+    currentChunk.push(...group)
+  }
+
+  if (currentChunk.length > 0) chunks.push(currentChunk)
+  return chunks
+}
+
+function buildZipRangeName(baseZipName: string, chunk: PdfTarget[], mode: 'agent' | 'period'): string {
+  if (chunk.length === 0) return baseZipName
+  if (mode === 'agent') {
+    const fromAgent = chunk[0]?.cuil ?? 'inicio'
+    const toAgent = chunk[chunk.length - 1]?.cuil ?? 'fin'
+    return `${baseZipName}-agentes-${fromAgent}-a-${toAgent}`
+  }
+  const fromPeriod = chunk[0]?.periodo ?? 'inicio'
+  const toPeriod = chunk[chunk.length - 1]?.periodo ?? 'fin'
+  return `${baseZipName}-periodos-${fromPeriod}-a-${toPeriod}`
 }
 
 export function PayrollPage() {
@@ -1104,13 +1162,13 @@ export function PayrollPage() {
           : groupMode === 'agent'
             ? 'haberes-por-agente'
             : 'haberes-por-periodo'
-      const zip = new JSZip()
       const zipConcurrency = Math.min(
         8,
         Math.max(2, Math.floor((((window.navigator?.hardwareConcurrency as number | undefined) ?? 4) + 1) / 2)),
       )
-      let completed = 0
-      let added = 0
+      const targetChunks = partitionTargetsByMode(targets, groupMode, ZIP_MAX_ITEMS_PER_FILE)
+      let totalCompleted = 0
+      let totalAdded = 0
       const skipped: string[] = []
       const summary: ZipResultSummary = {
         generated: 0,
@@ -1122,13 +1180,43 @@ export function PayrollPage() {
       }
 
       let lastProgressTs = 0
-      await mapLimit(targets, zipConcurrency || ZIP_DOWNLOAD_CONCURRENCY, async (target) => {
-        const fallbackName = `haberes-${target.cuil}-${target.periodo}.pdf`
-        try {
-          const d = await buildPdfEntryForTarget(target)
-          if (!d) {
+      for (let chunkIndex = 0; chunkIndex < targetChunks.length; chunkIndex += 1) {
+        const chunk = targetChunks[chunkIndex] ?? []
+        if (chunk.length === 0) continue
+        const zip = new JSZip()
+        let chunkAdded = 0
+
+        await mapLimit(chunk, zipConcurrency || ZIP_DOWNLOAD_CONCURRENCY, async (target) => {
+          const fallbackName = `haberes-${target.cuil}-${target.periodo}.pdf`
+          try {
+            const d = await buildPdfEntryForTarget(target)
+            if (!d) {
+              const reason =
+                pdfSkipReasonRef.current.get(`${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`) ?? 'sin datos'
+              skipped.push(`${fallbackName} (${reason})`)
+              setOnDemandObservations((prev) => {
+                const key = `${target.cuil}|${target.periodo.replace('-', '')}|${reason}`
+                if (seenOnDemandObservationKeysRef.current.has(key)) return prev
+                seenOnDemandObservationKeysRef.current.add(key)
+                return [...prev, { cuil: target.cuil, message: `${reason} (Período ${target.periodo})` }]
+              })
+              summary.skipped += 1
+              summary[classifySkipReason(reason)] += 1
+              return null
+            }
+            const filename = pdfFilename(d)
+            const bytes = await createPdfUint8ArrayWithTimeout(d.doc, PDF_TIMEOUT_MS)
+            const inner = groupMode === 'period' ? `${d.periodo}/${filename}` : `${d.cuil}/${filename}`
+            const zipPath = manualDocFolder ? `${manualDocFolder}/${inner}` : inner
+            zip.file(zipPath, bytes, { binary: true })
+            chunkAdded += 1
+            totalAdded += 1
+            summary.generated += 1
+            return null
+          } catch (err) {
+            console.error('Error al generar PDF para ZIP', fallbackName, err)
             const reason =
-              pdfSkipReasonRef.current.get(`${target.cuil}${TARGET_FETCH_KEY_SEP}${target.periodo}`) ?? 'sin datos'
+              err instanceof Error ? (err.message === 'timeout' ? 'timeout' : err.message) : 'error'
             skipped.push(`${fallbackName} (${reason})`)
             setOnDemandObservations((prev) => {
               const key = `${target.cuil}|${target.periodo.replace('-', '')}|${reason}`
@@ -1139,44 +1227,49 @@ export function PayrollPage() {
             summary.skipped += 1
             summary[classifySkipReason(reason)] += 1
             return null
+          } finally {
+            totalCompleted += 1
+            const now = Date.now()
+            if (totalCompleted === targets.length || totalCompleted % 5 === 0 || now - lastProgressTs >= 250) {
+              lastProgressTs = now
+              setZipProgress({
+                current: totalCompleted,
+                total: targets.length,
+                label: `Procesados ${totalCompleted}/${targets.length}`,
+              })
+            }
           }
-          const filename = pdfFilename(d)
-          const bytes = await createPdfUint8ArrayWithTimeout(d.doc, PDF_TIMEOUT_MS)
-          const inner = groupMode === 'period' ? `${d.periodo}/${filename}` : `${d.cuil}/${filename}`
-          const zipPath = manualDocFolder ? `${manualDocFolder}/${inner}` : inner
-          zip.file(zipPath, bytes, { binary: true })
-          added += 1
-          summary.generated += 1
-          return null
-        } catch (err) {
-          console.error('Error al generar PDF para ZIP', fallbackName, err)
-          const reason =
-            err instanceof Error ? (err.message === 'timeout' ? 'timeout' : err.message) : 'error'
-          skipped.push(`${fallbackName} (${reason})`)
-          setOnDemandObservations((prev) => {
-            const key = `${target.cuil}|${target.periodo.replace('-', '')}|${reason}`
-            if (seenOnDemandObservationKeysRef.current.has(key)) return prev
-            seenOnDemandObservationKeysRef.current.add(key)
-            return [...prev, { cuil: target.cuil, message: `${reason} (Período ${target.periodo})` }]
-          })
-          summary.skipped += 1
-          summary[classifySkipReason(reason)] += 1
-          return null
-        } finally {
-          completed += 1
-          const now = Date.now()
-          if (completed === targets.length || completed % 5 === 0 || now - lastProgressTs >= 250) {
-            lastProgressTs = now
-            setZipProgress({
-              current: completed,
-              total: targets.length,
-              label: `Procesados ${completed}/${targets.length}`,
-            })
-          }
-        }
-      })
+        })
 
-      if (added === 0) {
+        if (chunkAdded === 0) continue
+
+        setZipProgress({
+          current: totalCompleted,
+          total: targets.length,
+          label: `Empaquetando ZIP ${chunkIndex + 1}/${targetChunks.length}…`,
+        })
+        let lastPackedPct = -1
+        const rawZipBlob = await generateZipBlobWithTimeout(
+          zip,
+          (percent) => {
+            const pct = Math.round(percent)
+            if (pct < 100 && pct - lastPackedPct < 5) return
+            lastPackedPct = pct
+            setZipProgress({
+              current: totalCompleted,
+              total: targets.length,
+              label: `Empaquetando ZIP ${chunkIndex + 1}/${targetChunks.length}… ${pct}%`,
+            })
+          },
+          ZIP_FINALIZE_TIMEOUT_MS,
+        )
+        const chunkBaseName = buildZipRangeName(baseZipName, chunk, groupMode)
+        const chunkSuffix =
+          targetChunks.length > 1 ? `-parte-${String(chunkIndex + 1).padStart(2, '0')}-de-${targetChunks.length}` : ''
+        downloadBlob(rawZipBlob, `${chunkBaseName}${chunkSuffix}.zip`)
+      }
+
+      if (totalAdded === 0) {
         shouldPreserveDownloadObservations = true
         setZipSkipped(skipped)
         setZipResultSummary(summary)
@@ -1184,27 +1277,6 @@ export function PayrollPage() {
         return
       }
 
-      setZipProgress({
-        current: targets.length,
-        total: targets.length,
-        label: 'Empaquetando ZIP final…',
-      })
-      let lastPackedPct = -1
-      const rawZipBlob = await generateZipBlobWithTimeout(
-        zip,
-        (percent) => {
-          const pct = Math.round(percent)
-          if (pct < 100 && pct - lastPackedPct < 5) return
-          lastPackedPct = pct
-          setZipProgress({
-            current: targets.length,
-            total: targets.length,
-            label: `Empaquetando ZIP final… ${pct}%`,
-          })
-        },
-        ZIP_FINALIZE_TIMEOUT_MS,
-      )
-      downloadBlob(rawZipBlob, `${baseZipName}.zip`)
       setZipSkipped(skipped)
       setZipResultSummary(summary)
       if (skipped.length > 0) {
