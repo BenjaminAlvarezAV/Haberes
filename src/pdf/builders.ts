@@ -158,7 +158,7 @@ type SecuenciaGroup = {
     apoyoReal: string
     cargoInt: string
     apoyoInt: string
-    periodoLiqSix: string
+    periodoLiqDisplay: string
     ordenPagoPadded: string
     antiguedad: string
     inasistencias: string
@@ -191,6 +191,23 @@ function padLeftDigits(value: unknown, len: number, emptyFallback: string): stri
 
 function normalizeOrg(value: unknown): string {
   return String(value ?? '').trim()
+}
+
+function formatPeriodoLiq(yyyymmValue: string): string {
+  const digits = String(yyyymmValue ?? '')
+    .replace(/\D/g, '')
+    .trim()
+  if (!/^\d{6}$/.test(digits)) return ''
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}`
+}
+
+function formatCuitCuil(value: string): string {
+  const raw = String(value ?? '').trim()
+  const digits = raw.replace(/\D/g, '')
+  if (/^\d{11}$/.test(digits)) {
+    return `${digits.slice(0, 2)}-${digits.slice(2, 10)}-${digits.slice(10)}`
+  }
+  return raw
 }
 
 function estabKey(tipoOrg: unknown, numero: unknown): string {
@@ -287,6 +304,7 @@ function groupBySecuencia(
         .trim()
       const periodoLiqSix =
         mesaRaw.length >= 6 ? mesaRaw.slice(0, 6) : yyyymm(periodoLiq).replace(/\D/g, '').slice(0, 6)
+      const periodoLiqDisplay = formatPeriodoLiq(periodoLiqSix) || periodoLiq
 
       map.set(key, {
         key,
@@ -311,7 +329,7 @@ function groupBySecuencia(
           apoyoReal: (it.apoyoReal ?? '').trim() || '',
           cargoInt: (it.catInt ?? '').trim() || '',
           apoyoInt: (it.apoyoInt ?? '').trim() || '',
-          periodoLiqSix: periodoLiqSix || yyyymm(fallbackPeriodo),
+          periodoLiqDisplay: periodoLiqDisplay || fallbackPeriodo,
           ordenPagoPadded: '—',
           antiguedad: (it.antig ?? '').trim() || '—',
           inasistencias: (it.inas ?? '').trim() || '0.00',
@@ -546,7 +564,7 @@ function buildReceiptPage({
   const head = secuGroups[0]?.items?.[0] ?? cheques?.liquidacionPorSecuencia?.[0]
   const nombre = head?.apYNom ?? agentName
   const sexo = head?.sexo ?? '—'
-  const cuitCuil = head?.cuitCuil ? head.cuitCuil : '—'
+  const cuitCuil = formatCuitCuil(head?.cuitCuil ?? '') || '—'
   const liquidRows = cheques?.liquidPorEstablecimiento ?? []
   const total = liquidRows.length > 0 ? sumLiquid(liquidRows) : sectionTotal(items)
 
@@ -811,7 +829,7 @@ function buildReceiptPage({
                   cell(g.meta.apoyoReal, 'tdTiny'),
                   cell(g.meta.cargoInt, 'tdTiny'),
                   cell(g.meta.apoyoInt, 'tdTiny'),
-                  cell(g.meta.periodoLiqSix, 'tdTiny'),
+                  cell(g.meta.periodoLiqDisplay, 'tdTiny'),
                   cell(ordenLabel, 'tdTiny', { alignment: 'right' }),
                 ],
               ],
