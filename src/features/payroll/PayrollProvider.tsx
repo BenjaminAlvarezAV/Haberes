@@ -356,6 +356,7 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
       const pairKeys = new Set<string>()
       const validatedSet = new Set(validatedRequestedIds)
       const secuenciaFilterByKey = new Map<string, SecuenciaFilterSpec>()
+      const selectedPeriodsSet = new Set(effective.periodos)
 
       const pairs =
         state.queryMode !== 'batch'
@@ -372,20 +373,27 @@ export function PayrollProvider({ children }: { children: ReactNode }) {
               )
               .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
           : useManualPeriods
-            ? validatedRequestedIds
-                .flatMap((id) =>
-                  effective.periodos.map((p) => {
-                    const periodoYYYYMM = p.replace('-', '')
+            ? csvRows
+                .flatMap((row) => {
+                  const id = normalizeRequestedId(row.documento)
+                  if (!id || !validatedSet.has(id)) return []
+                  const periods = expandYYYYMMRange(row.periodoDesde, row.periodoHasta).filter((periodo) =>
+                    selectedPeriodsSet.has(periodo),
+                  )
+                  const part = filterSpecFromCsvSecuencia(row.secuencia)
+                  return periods.map((periodo) => {
+                    const periodoYYYYMM = periodo.replace('-', '')
                     const key = `${id}-${periodoYYYYMM}`
-                    if (pairKeys.has(key)) return null
+                    if (pairKeys.has(key)) {
+                      const prev = secuenciaFilterByKey.get(key) ?? { mode: 'all' }
+                      secuenciaFilterByKey.set(key, mergeSecuenciaFilterSpecs(prev, part))
+                      return null
+                    }
                     pairKeys.add(key)
-                    secuenciaFilterByKey.set(
-                      key,
-                      resolveCsvSecuenciaFilterSpecForPair(id, periodoYYYYMM, csvRows, normalizeRequestedId),
-                    )
+                    secuenciaFilterByKey.set(key, part)
                     return { id, periodoYYYYMM }
-                  }),
-                )
+                  })
+                })
                 .filter((p): p is { id: string; periodoYYYYMM: string } => p !== null)
             : csvRows
                 .flatMap((row) => {
